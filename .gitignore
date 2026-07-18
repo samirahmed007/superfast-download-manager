@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.sdmpart
+*.sdmpart.json
+.venv/
+venv/
+build/
+dist/
+*.spec
+.superfast-dm/
