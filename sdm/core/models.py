@@ -163,9 +163,17 @@ class DownloadItem:
     @classmethod
     def from_row(cls, row: dict) -> "DownloadItem":
         row = dict(row)
-        row["kind"] = Kind(row.get("kind", "http"))
-        row["status"] = Status(row.get("status", "queued"))
-        row["priority"] = Priority(row.get("priority", "normal"))
+
+        def _enum(enum_cls, value, default):
+            # Tolerate NULL/blank/unknown values from older or partial rows.
+            try:
+                return enum_cls(value) if value else default
+            except ValueError:
+                return default
+
+        row["kind"] = _enum(Kind, row.get("kind"), Kind.HTTP)
+        row["status"] = _enum(Status, row.get("status"), Status.QUEUED)
+        row["priority"] = _enum(Priority, row.get("priority"), Priority.NORMAL)
         # drop keys that are computed / not constructor args
         for k in ("progress", "filepath", "display_name"):
             row.pop(k, None)

@@ -33,6 +33,16 @@ class Store:
             self._conn.execute(
                 f"CREATE TABLE IF NOT EXISTS downloads (id TEXT PRIMARY KEY, {cols})"
             )
+            # Migrate older DBs: add any columns introduced after the table
+            # was first created (ALTER TABLE ADD COLUMN is a no-op-safe way to
+            # bring an existing schema up to date without dropping data).
+            existing = {
+                r["name"] for r in self._conn.execute(
+                    "PRAGMA table_info(downloads)").fetchall()
+            }
+            for f in _FIELDS:
+                if f not in existing:
+                    self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {f} TEXT")
             self._conn.commit()
 
     def upsert(self, item: DownloadItem):
