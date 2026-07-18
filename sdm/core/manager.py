@@ -47,6 +47,8 @@ class DownloadManager:
         self._wake = threading.Event()
         self._on_progress: ProgressCb = lambda _i: None
         self._speed_limit = 0                     # global bytes/sec cap (0 = off)
+        self._schedule_hold = False               # scheduler gate
+        self._auto_paused: set[str] = set()       # ids paused by the scheduler
 
         self._running = True
         self._scheduler = threading.Thread(target=self._schedule_loop, daemon=True)
@@ -156,6 +158,31 @@ class DownloadManager:
         """Global download speed cap in bytes/sec (0 = unlimited)."""
         self._speed_limit = max(0, bytes_per_sec)
 
+    def set_schedule_hold(self, hold: bool):
+        """Scheduler gate: when held, pause active downloads and stop admitting.
+
+        Items paused by the hold are remembered so they auto-resume when the
+        window reopens — without disturbing downloads the user paused manually.
+        """
+        with self._lock:
+            self._schedule_hold = hold
+        if hold:
+            with self._lock:
+                to_pause = [iid for iid, w in self._workers.items()]
+                self._auto_paused = set(to_pause) | {
+                    iid for iid in self._queue}
+                workers = [(iid, self._workers.get(iid)) for iid in to_pause]
+            for iid, w in workers:
+                if w:
+                    w.pause()
+        else:
+            with self._lock:
+                resume = list(self._auto_paused)
+                self._auto_paused.clear()
+            for iid in resume:
+                self.start(iid)
+            self._wake.set()
+
     # ---- scheduler ------------------------------------------------------
     def _schedule_loop(self):
         while self._running:
@@ -163,6 +190,8 @@ class DownloadManager:
             self._wake.clear()
             while True:
                 with self._lock:
+                    if self._schedule_hold:
+                        break
                     if len(self._active) >= self._max_concurrent:
                         break
                     nxt = self._pick_next_locked()

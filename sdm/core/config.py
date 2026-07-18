@@ -23,6 +23,14 @@ class Config:
     connections_per_download: int = 8
     theme: str = "dark"
 
+    # Phase 2: enhancements
+    clipboard_watch: bool = False          # auto-detect copied download links
+    clipboard_auto_add: bool = False       # add silently vs. prompt
+    speed_limit_kb: int = 0                # global cap in KB/s (0 = unlimited)
+    schedule_enabled: bool = False
+    schedule_start: str = "01:00"          # HH:MM — start queue at this time
+    schedule_stop: str = "07:00"           # HH:MM — pause queue at this time
+
     def __post_init__(self):
         if not self.download_dir:
             self.download_dir = _default_download_dir()

@@ -4,13 +4,22 @@ from __future__ import annotations
 import os
 import webbrowser
 
-from PySide6.QtCore import Qt, QObject, Signal, QTimer
+from PySide6.QtCore import Qt, QObject, Signal, QTimer, QTime
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QProgressBar, QToolBar, QLabel, QComboBox,
     QSpinBox, QFileDialog, QMessageBox, QMenu, QHeaderView, QStatusBar,
+    QCheckBox, QTimeEdit,
 )
+
+
+def _parse_qtime(hhmm: str) -> QTime:
+    try:
+        h, m = hhmm.split(":")
+        return QTime(int(h), int(m))
+    except (ValueError, AttributeError):
+        return QTime(0, 0)
 
 from ..core.config import Config, DB_PATH
 from ..core.manager import DownloadManager, guess_kind
@@ -67,6 +76,21 @@ class MainWindow(QMainWindow):
         self._ticker.timeout.connect(self._update_statusbar)
         self._ticker.start(1000)
 
+        # Phase 2: apply persisted speed limit, clipboard watch, scheduler
+        self.manager.set_speed_limit(self.cfg.speed_limit_kb * 1024)
+
+        from .clipboard_watch import ClipboardWatcher
+        from .scheduler import Scheduler
+        self.clipboard = ClipboardWatcher(self)
+        self.clipboard.link_found.connect(self._on_clipboard_link)
+        self.clipboard.set_enabled(self.cfg.clipboard_watch)
+
+        self.scheduler = Scheduler(self)
+        self.scheduler.window_changed.connect(
+            lambda is_open: self.manager.set_schedule_hold(not is_open))
+        self.scheduler.configure(self.cfg.schedule_enabled,
+                                 self.cfg.schedule_start, self.cfg.schedule_stop)
+
     # ---- UI construction -----------------------------------------------
     def _build_toolbar(self):
         tb = QToolBar()
@@ -122,6 +146,46 @@ class MainWindow(QMainWindow):
         self.par_spin.valueChanged.connect(self._on_parallel_changed)
         controls.addWidget(self.par_spin)
         layout.addLayout(controls)
+
+        # second row: Phase 2 controls (speed limit, clipboard, scheduler)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Speed limit (KB/s, 0=∞):"))
+        self.speed_spin = QSpinBox()
+        self.speed_spin.setRange(0, 1_000_000)
+        self.speed_spin.setSingleStep(128)
+        self.speed_spin.setValue(self.cfg.speed_limit_kb)
+        self.speed_spin.valueChanged.connect(self._on_speed_changed)
+        row2.addWidget(self.speed_spin)
+
+        row2.addSpacing(16)
+        self.clip_check = QCheckBox("Monitor clipboard")
+        self.clip_check.setChecked(self.cfg.clipboard_watch)
+        self.clip_check.toggled.connect(self._on_clip_toggled)
+        row2.addWidget(self.clip_check)
+
+        self.clip_auto_check = QCheckBox("Auto-add (no prompt)")
+        self.clip_auto_check.setChecked(self.cfg.clipboard_auto_add)
+        self.clip_auto_check.toggled.connect(self._on_clip_auto_toggled)
+        row2.addWidget(self.clip_auto_check)
+
+        row2.addSpacing(16)
+        self.sched_check = QCheckBox("Schedule:")
+        self.sched_check.setChecked(self.cfg.schedule_enabled)
+        self.sched_check.toggled.connect(self._on_schedule_changed)
+        row2.addWidget(self.sched_check)
+        self.sched_start = QTimeEdit()
+        self.sched_start.setDisplayFormat("HH:mm")
+        self.sched_start.setTime(_parse_qtime(self.cfg.schedule_start))
+        self.sched_start.timeChanged.connect(self._on_schedule_changed)
+        row2.addWidget(self.sched_start)
+        row2.addWidget(QLabel("to"))
+        self.sched_stop = QTimeEdit()
+        self.sched_stop.setDisplayFormat("HH:mm")
+        self.sched_stop.setTime(_parse_qtime(self.cfg.schedule_stop))
+        self.sched_stop.timeChanged.connect(self._on_schedule_changed)
+        row2.addWidget(self.sched_stop)
+        row2.addStretch(1)
+        layout.addLayout(row2)
 
         # table
         self.table = QTableWidget(0, len(COLS))
@@ -180,6 +244,26 @@ class MainWindow(QMainWindow):
             self.url_input.setText(text)
             self._add_from_input()
 
+    def _on_clipboard_link(self, url: str):
+        if self.cfg.clipboard_auto_add:
+            self.manager.add(url)
+            self.status_label.setText(f"Auto-added from clipboard: {url[:60]}")
+            return
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle("Download link detected")
+        box.setText("A download link was copied to your clipboard:")
+        box.setInformativeText(url[:120])
+        add = box.addButton("Add with options…", QMessageBox.AcceptRole)
+        quick = box.addButton("Quick add", QMessageBox.ActionRole)
+        box.addButton("Ignore", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is add:
+            self._open_add_dialog(url)
+        elif clicked is quick:
+            self.manager.add(url)
+
     def _open_add_dialog(self, initial_url: str = ""):
         from .add_dialog import AddDialog
         url = initial_url or self.url_input.text().strip()
@@ -207,6 +291,30 @@ class MainWindow(QMainWindow):
         self.cfg.max_concurrent = v
         self.manager.set_max_concurrent(v)
         self.cfg.save()
+
+    def _on_speed_changed(self, v):
+        self.cfg.speed_limit_kb = v
+        self.manager.set_speed_limit(v * 1024)
+        self.cfg.save()
+
+    def _on_clip_toggled(self, on):
+        self.cfg.clipboard_watch = bool(on)
+        self.clipboard.set_enabled(bool(on))
+        self.cfg.save()
+
+    def _on_clip_auto_toggled(self, on):
+        self.cfg.clipboard_auto_add = bool(on)
+        self.cfg.save()
+
+    def _on_schedule_changed(self, *_):
+        self.cfg.schedule_enabled = self.sched_check.isChecked()
+        self.cfg.schedule_start = self.sched_start.time().toString("HH:mm")
+        self.cfg.schedule_stop = self.sched_stop.time().toString("HH:mm")
+        self.cfg.save()
+        self.scheduler.configure(self.cfg.schedule_enabled,
+                                 self.cfg.schedule_start, self.cfg.schedule_stop)
+        if not self.cfg.schedule_enabled:
+            self.manager.set_schedule_hold(False)
 
     def _selected_ids(self) -> list[str]:
         ids = []
