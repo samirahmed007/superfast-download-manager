@@ -7,6 +7,7 @@ cancellation.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -17,7 +18,7 @@ from urllib.parse import urlparse, unquote
 
 import requests
 
-from .models import DownloadItem, Segment, Status
+from .models import DownloadItem, Segment, Status, sanitize_filename
 
 CHUNK = 1024 * 256          # 256 KiB socket reads
 MIN_SEG = 1024 * 1024       # don't split below 1 MiB/segment
@@ -48,6 +49,13 @@ class HttpDownloader:
         self._throttle_bytes = 0
         self._session = requests.Session()
         self._session.headers["User-Agent"] = USER_AGENT
+        # Size the connection pool to the worker count so parallel segments
+        # never block waiting for a free pooled socket (default is only 10).
+        pool = max(10, item.connections * 2 + 4)
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=pool, pool_maxsize=pool, max_retries=0)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
 
     # ---- public control -------------------------------------------------
     def pause(self):
@@ -100,10 +108,10 @@ class HttpDownloader:
         if "filename=" in cd:
             name = cd.split("filename=")[-1].strip().strip('"; ')
             if name:
-                return unquote(name)
+                return sanitize_filename(unquote(name))
         path = urlparse(resp.url).path
-        name = unquote(os.path.basename(path)) or "download"
-        return name
+        name = unquote(os.path.basename(path))
+        return sanitize_filename(name)
 
     def _plan_segments(self) -> list[Segment]:
         n = max(1, self.item.connections)
@@ -127,7 +135,11 @@ class HttpDownloader:
                 data = json.load(f)
             if data.get("url") != self.item.url or data.get("total") != self.item.total_bytes:
                 return False
-            self._segments = [Segment(**s) for s in data["segments"]]
+            segs = []
+            for s in data["segments"]:
+                s.pop("active", None)   # transient; never resume as "owned"
+                segs.append(Segment(**s))
+            self._segments = segs
             self.item.downloaded_bytes = sum(s.downloaded for s in self._segments)
             return True
         except (OSError, ValueError, KeyError):
@@ -151,6 +163,51 @@ class HttpDownloader:
             except OSError:
                 pass
 
+    # ---- work-stealing scheduler ----------------------------------------
+    def _next_work(self) -> Optional[Segment]:
+        """Hand a worker its next segment. Caller must NOT hold the lock.
+
+        Priority: (1) any not-yet-started, incomplete segment; (2) otherwise
+        split the tail off the segment with the most bytes left to fetch, so a
+        freed connection accelerates the slowest one instead of going idle.
+        This is what keeps every connection saturated to the last byte.
+        """
+        with self._lock:
+            # 1) claim an idle, incomplete segment as-is
+            for s in self._segments:
+                if not s.active and not s.is_complete:
+                    s.active = True
+                    return s
+            # 2) steal the tail of the busiest segment (only worth it when the
+            #    remainder is big enough to justify a fresh connection)
+            if not self.item.supports_ranges:
+                return None
+            victim = max((s for s in self._segments if s.active),
+                         key=lambda s: s.remaining, default=None)
+            if victim is None or victim.remaining < 2 * MIN_SEG:
+                return None
+            split = victim.current_pos + victim.remaining // 2
+            tail = Segment(index=len(self._segments), start=split,
+                           end=victim.end, active=True)
+            victim.end = split - 1        # victim now stops early; it will notice
+            self._segments.append(tail)
+            return tail
+
+    def _worker_loop(self, fh_path: str, errors: list):
+        """Pull segments until the file is done, stolen tails and all."""
+        while not self._stop.is_set():
+            seg = self._next_work()
+            if seg is None:
+                return
+            try:
+                self._download_segment(seg, fh_path)
+            except Exception as e:  # noqa: BLE001 - collect, let siblings finish
+                errors.append(str(e))
+                return
+            finally:
+                with self._lock:
+                    seg.active = False
+
     # ---- worker ---------------------------------------------------------
     def _download_segment(self, seg: Segment, fh_path: str):
         attempt = 0
@@ -173,7 +230,9 @@ class HttpDownloader:
                             fh.write(chunk)
                             with self._lock:
                                 seg.downloaded += len(chunk)
-                                self.item.downloaded_bytes += len(chunk)
+                            # Our tail was stolen: stop here, let the thief finish it.
+                            if seg.current_pos > seg.end:
+                                return
                             self._maybe_throttle(len(chunk))
                 return
             except (requests.RequestException, OSError) as e:
@@ -231,9 +290,12 @@ class HttpDownloader:
             monitor.start()
 
             errors = []
-            with ThreadPoolExecutor(max_workers=len(self._segments)) as pool:
-                futures = [pool.submit(self._download_segment, s, part)
-                           for s in self._segments if not s.is_complete]
+            # One worker thread per planned connection; each pulls segments
+            # from the shared pool and steals tails when it runs dry.
+            n_workers = max(1, len(self._segments))
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = [pool.submit(self._worker_loop, part, errors)
+                           for _ in range(n_workers)]
                 for fut in futures:
                     try:
                         fut.result()
@@ -242,10 +304,15 @@ class HttpDownloader:
 
             self._stop.set()
             monitor.join(timeout=2)
+            self._aggregate_progress()
 
             if self._cancelled:
                 self.item.status = Status.CANCELLED
                 self._cleanup_files(part)
+                # discard partial progress so a later start is a clean restart
+                self.item.downloaded_bytes = 0
+                self.item.speed = 0.0
+                self.item.eta = 0.0
                 self._emit()
                 return
 
@@ -262,9 +329,21 @@ class HttpDownloader:
             os.replace(part, self.item.filepath)
             self._clear_state()
             self.item.downloaded_bytes = self.item.total_bytes or self.item.downloaded_bytes
+            self.item.speed = 0.0
+            self.item.seg_progress = []
+            # Optional integrity check against a user-supplied checksum.
+            if self.item.checksum:
+                self.item.status = Status.CONNECTING  # transient "verifying" state
+                self._emit()
+                ok = self._verify_checksum(self.item.filepath, self.item.checksum)
+                self.item.checksum_ok = ok
+                if not ok:
+                    self.item.status = Status.ERROR
+                    self.item.error = "Checksum mismatch — file may be corrupt"
+                    self._emit()
+                    return
             self.item.status = Status.COMPLETED
             self.item.completed_at = time.time()
-            self.item.speed = 0.0
             self._emit()
         except Exception as e:  # noqa: BLE001 - surface any failure to UI
             if self._cancelled:
@@ -275,14 +354,33 @@ class HttpDownloader:
             self._save_state()
             self._emit()
 
+    def _aggregate_progress(self):
+        """Recompute total bytes + per-segment fractions from segment state.
+
+        With work-stealing the set of segments changes over time, so the
+        authoritative downloaded total is the sum of segment progress rather
+        than a running counter. Also publishes ``seg_progress`` for the live
+        per-connection view.
+        """
+        with self._lock:
+            total = 0
+            fracs = []
+            for s in self._segments:
+                total += s.downloaded
+                fracs.append(min(1.0, s.downloaded / s.total) if s.total > 0 else 1.0)
+        self.item.downloaded_bytes = total
+        self.item.seg_progress = fracs
+
     def _monitor(self):
         """Compute smoothed speed + ETA and periodically checkpoint state."""
+        self._aggregate_progress()
         last_bytes = self.item.downloaded_bytes
         last_t = time.time()
         ema = 0.0
         tick = 0
         while not self._stop.is_set():
             time.sleep(0.5)
+            self._aggregate_progress()
             now = time.time()
             dt = now - last_t
             if dt <= 0:
@@ -299,6 +397,35 @@ class HttpDownloader:
             tick += 1
             if tick % 6 == 0:      # checkpoint every ~3s
                 self._save_state()
+
+    @staticmethod
+    def _verify_checksum(path: str, spec: str) -> bool:
+        """Verify ``path`` against a checksum spec.
+
+        ``spec`` is "algo:hexdigest" (e.g. "sha256:ab12...") or a bare hex
+        digest, in which case the algorithm is inferred from its length
+        (32=md5, 40=sha1, 64=sha256, 128=sha512).
+        """
+        spec = (spec or "").strip().lower()
+        if not spec:
+            return True
+        if ":" in spec:
+            algo, _, expected = spec.partition(":")
+        else:
+            expected = spec
+            algo = {32: "md5", 40: "sha1", 64: "sha256",
+                    128: "sha512"}.get(len(expected), "")
+        expected = expected.strip()
+        if algo not in hashlib.algorithms_available or not expected:
+            return True  # unknown spec: don't fail a good download over it
+        try:
+            h = hashlib.new(algo)
+            with open(path, "rb") as f:
+                for block in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(block)
+            return h.hexdigest().lower() == expected
+        except OSError:
+            return False
 
     def _cleanup_files(self, part: str):
         for p in (part, part + ".json"):

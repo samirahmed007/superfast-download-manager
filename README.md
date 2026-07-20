@@ -1,78 +1,157 @@
-# Superfast Download Manager
+<div align="center">
 
-A fast, free desktop download manager for Windows, built with Python + PySide6 (Qt).
+# ⚡ Superfast Download Manager
 
-## Features
+**A fast, free, premium-grade desktop download manager — built with Python + PySide6 (Qt).**
 
-- **Multi-connection acceleration** — splits each file into up to 32 parallel
-  byte-range connections (IDM/aria2 style) for maximum speed on servers that
-  support HTTP ranges. Falls back cleanly to a single stream when they don't.
-- **Video / media downloads** — YouTube, Vimeo, TikTok, and 1000+ sites via
-  yt-dlp. Links are auto-detected and routed to the media engine.
-- **Pause & resume** — segmented downloads resume from exactly where they
-  stopped (a `.sdmpart` sidecar tracks per-segment progress). Media downloads
-  continue via yt-dlp's own partial files.
-- **Queue with concurrency control** — cap how many downloads run at once and
-  how many connections each uses.
-- **Persistent history** — the list survives restarts (SQLite).
-- **Live progress** — per-item speed, ETA, progress bar, and a global speed
-  readout in the status bar.
-- **Dark premium UI** — clean Qt interface, context menus, drag-free workflow.
+Multi-connection acceleration, 1000+ video sites, pause/resume, scheduling, and a clean light/dark UI. No ads. No sign-up. No nonsense.
 
-## Requirements
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
-- Python 3.9+
-- Windows (tested on Windows 10). The core is cross-platform; `os.startfile`
-  for "open file/folder" is Windows-specific.
-- Optional: **ffmpeg** on your PATH (or set the `SDM_FFMPEG` env var to a folder
-  containing `ffmpeg.exe`). Needed only to merge high-quality video+audio from
-  media sites. Without it, media still downloads at a slightly lower muxed
-  quality.
+</div>
 
-## Install & run
+---
+
+## Why you'll like it
+
+Most download managers are either bloated, ad-riddled, or locked behind a paywall. This one is none of those. It borrows the best ideas from IDM and aria2 — parallel byte-range downloading with work-stealing — wraps them in a modern Qt interface, and adds full yt-dlp media support so you can grab videos from 1000+ sites with a quality picker. It's a single portable `.exe` or a proper installer. That's it.
+
+## ✨ Features
+
+- **⚡ Work-stealing multi-connection engine** — splits each file into up to 32 parallel byte-range connections. When one connection finishes early, it *steals the tail* of the slowest remaining segment, so a single slow mirror never bottlenecks the whole download.
+- **🎬 Video / media downloads** — YouTube, Vimeo, TikTok, and 1000+ sites via yt-dlp, with a quality/format picker grouped by resolution.
+- **📋 Batch & playlist add** — paste many URLs at once, or expand a playlist / channel URL into individual downloads.
+- **⏸️ Pause, resume & stop** — segmented downloads resume from exactly where they stopped (a `.sdmpart` sidecar tracks per-segment progress). *Pause* keeps partial data; *Stop* discards it for a clean restart.
+- **🔐 Checksum verification** — optionally verify a finished file against an expected `sha256:` / `md5:` (or bare hex) digest; mismatches are flagged, not silently kept.
+- **🗂️ Auto-categorization** — direct files are sorted into Software, Media, Documents, Archives, Images, or Other by extension; media links become Media.
+- **🚦 Queue with priorities** — Urgent / High / Normal / Low, changeable per download from a dropdown or the right-click menu.
+- **📎 Clipboard capture** — auto-detect copied download links and add them.
+- **🕒 Scheduler** — restrict downloads to a time window (handles midnight crossing); global speed limit in KB/s.
+- **✅ Multi-select** — Ctrl/Shift-click rows (or `Ctrl+A`), then resume / pause / remove them in bulk.
+- **📰 Activity & error log** — a collapsible bottom panel shows real-time status transitions, auto-opens on errors, and entries are copyable.
+- **🌗 Light / dark themes** — live-switchable, plus "follow system".
+- **💾 Persistent history** — the list survives restarts (SQLite).
+- **⌨️ Full menu bar & keyboard shortcuts** — see below.
+
+## 📥 Download & install (for users)
+
+Grab the latest **`SuperfastDownloadManager-Setup-x.x.x.exe`** from the [Releases page](https://github.com/samirahmed007/superfast-download-manager/releases) and run it. The installer is per-user (no admin rights required), adds a Start Menu shortcut, and includes a clean uninstaller.
+
+Prefer no install? A single portable **`SuperfastDownloadManager.exe`** is also attached to each release — just download and double-click.
+
+> ffmpeg is optional. It's only needed to merge the highest-quality video+audio streams from media sites. Without it, the app downloads a single pre-muxed stream. Put `ffmpeg.exe` on your PATH or set the `SDM_FFMPEG` environment variable to its folder.
+
+## ⌨️ Keyboard shortcuts
+
+| Shortcut       | Action                          |
+|----------------|---------------------------------|
+| `Ctrl+N`       | New download                    |
+| `Ctrl+Shift+N` | Batch / playlist add            |
+| `Ctrl+V`       | Paste URL and add               |
+| `Ctrl+F`       | Focus search                    |
+| `Ctrl+A`       | Select all downloads            |
+| `Esc`          | Clear selection                 |
+| `Ctrl+Enter`   | Resume / start selected         |
+| `Ctrl+P`       | Pause selected                  |
+| `Ctrl+S`       | Stop selected (discard partial) |
+| `Delete`       | Remove selected from list       |
+| `Ctrl+L`       | Toggle activity log             |
+| `Ctrl+D`       | Toggle light / dark theme       |
+| `Ctrl+,`       | Open settings                   |
+| `Ctrl+Q`       | Exit                            |
+| `F1`           | Keyboard shortcuts help         |
+
+## 🚀 Run from source
 
 ```bash
+git clone https://github.com/samirahmed007/superfast-download-manager.git
+cd superfast-download-manager
 pip install -r requirements.txt
 python main.py
 ```
 
-## Usage
+**Requirements:** Python 3.9+, Windows (tested on Windows 10). The core is cross-platform; the "open file/folder" actions use Windows-specific `os.startfile`.
 
-1. Paste a URL into the top bar and press **Add** (or **Paste + Add** to grab
-   the clipboard).
-2. Direct file links download with parallel connections. Video-site links are
-   handled by yt-dlp automatically.
-3. Select rows to **Pause**, **Resume**, **Cancel**, or **Remove**. Right-click
-   for the same actions plus **Open file / folder** and **Copy URL**.
-4. Set the save folder, connections-per-download, and max parallel downloads
-   from the controls row. Settings persist.
+## 🛠️ Build it yourself
 
-## Where things live
+Full instructions live in [`command.txt`](command.txt). Quick version:
+
+```bash
+pip install pyinstaller
+
+# One portable .exe  ->  dist/onefile/SuperfastDownloadManager.exe
+pyinstaller superfast.spec --clean --noconfirm
+
+# App folder (installer input)  ->  dist/onedir/SuperfastDownloadManager/
+pyinstaller superfast-onedir.spec --clean --noconfirm
+
+# Windows installer (needs Inno Setup 6)  ->  installer_output/*-Setup-x.x.x.exe
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+```
+
+## 💡 Usage
+
+1. Press **Add** (or `Ctrl+N`) and paste a URL, or use **Paste + Add** to grab the clipboard. Use **Batch** for many URLs / playlists.
+2. Direct file links download with parallel connections; video-site links are handled by yt-dlp automatically. After a fetch, just press **Enter** to add.
+3. Select rows (Ctrl/Shift-click) to pause, resume, stop, or remove in bulk. Right-click for the same actions plus Open file / folder and Copy URL.
+4. Tune folder, connections, parallelism, speed limit, defaults, clipboard, and schedule from **Settings** (`Ctrl+,`).
+
+## 📂 Where things live
 
 - Config: `~/.superfast-dm/config.json`
 - Download history DB: `~/.superfast-dm/downloads.sqlite`
 - Default download folder: `~/Downloads/SuperfastDM`
 
-## Notes
+## 📝 Notes
 
-- Range support is per-server. Many CDNs (e.g. some Cloudflare endpoints)
-  ignore `Range` and return the whole file — the app detects this and uses a
-  single connection. This is expected, not a bug.
-- Respect the terms of service of the sites you download from and applicable
-  copyright law.
+- Range support is per-server. Many CDNs ignore `Range` and return the whole file — the app detects this and falls back to a single connection. This is expected.
+- Respect the terms of service of the sites you download from and applicable copyright law.
 
-## Architecture
+## 🧩 Architecture
 
 ```
-main.py                     entry point
+main.py                     entry point (icon, app id)
+assets/icon.ico|png         application icon
+superfast.spec              PyInstaller one-file build spec
+superfast-onedir.spec       PyInstaller one-dir build spec (installer input)
+installer.iss               Inno Setup installer script
+command.txt                 build instructions
 sdm/core/
-  models.py                 DownloadItem, Segment, Status, Kind
-  http_downloader.py        segmented parallel HTTP engine
+  models.py                 DownloadItem, Segment, Status, Kind, categorize()
+  http_downloader.py        segmented work-stealing HTTP engine + checksum
   media_downloader.py       yt-dlp wrapper
-  manager.py                queue, concurrency, routing, lifecycle
+  manager.py                queue, concurrency, routing, lifecycle, event log
   store.py                  SQLite persistence
+  probe.py                  metadata / format / playlist probing
+  eventlog.py               in-process activity/error log
   config.py                 settings + paths
 sdm/ui/
-  main_window.py            Qt main window
-  util.py                   formatting + dark stylesheet
+  main_window.py            Qt main window, menus, shortcuts, selection
+  sidebar.py                filters + category cards
+  download_card.py          per-item card with live segment view
+  segment_bar.py            live per-connection activity strip
+  add_dialog.py             single add with quality picker
+  batch_dialog.py           batch / playlist add
+  settings_dialog.py        tabbed settings
+  log_panel.py              collapsible activity/error panel
+  theme.py                  light/dark palettes + stylesheet
+  util.py                   formatting helpers + color tokens
 ```
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+
+Built with Python & PySide6 by **[Samir Uddin Ahmed](https://github.com/samirahmed007)**.
+
+If this saved you time, consider giving it a ⭐ — it helps others find it.
+
+</div>
+

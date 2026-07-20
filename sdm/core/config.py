@@ -31,6 +31,14 @@ class Config:
     schedule_start: str = "01:00"          # HH:MM — start queue at this time
     schedule_stop: str = "07:00"           # HH:MM — pause queue at this time
 
+    # Defaults for new downloads (mirrors the web app's settings panel)
+    default_priority: str = "normal"       # urgent | high | normal | low
+    default_ext: str = "mp4"               # mp4 | webm | mkv | mp3 (mp3 = audio)
+    default_audio_ext: str = "mp3"         # mp3 | m4a | opus | wav (audio-only)
+    default_resolution: str = "best"       # best | 2160 | 1440 | 1080 | 720 | 480
+    auto_start: bool = True                # start on add, or stay paused/queued
+    confirm_remove: bool = True            # ask before removing from the list
+
     def __post_init__(self):
         if not self.download_dir:
             self.download_dir = _default_download_dir()

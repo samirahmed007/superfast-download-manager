@@ -14,7 +14,7 @@ _FIELDS = [
     "downloaded_bytes", "connections", "supports_ranges", "error", "added_at",
     "started_at", "completed_at", "priority", "category", "format_id", "ext",
     "resolution", "title", "uploader", "extractor", "duration", "thumbnail",
-    "audio_only",
+    "audio_only", "checksum", "checksum_ok",
 ]
 
 
@@ -86,6 +86,9 @@ class Store:
                 return v in ("true", "1", "True", True)
             d["supports_ranges"] = _truthy(d.get("supports_ranges"))
             d["audio_only"] = _truthy(d.get("audio_only"))
+            # checksum_ok is a tri-state: None (unverified) / True / False
+            ck = d.get("checksum_ok")
+            d["checksum_ok"] = None if ck in (None, "", "None", "null") else _truthy(ck)
             items.append(DownloadItem.from_row(d))
         return items
 

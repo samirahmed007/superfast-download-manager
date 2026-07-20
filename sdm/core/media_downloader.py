@@ -124,27 +124,50 @@ class MediaDownloader:
         if ffmpeg:
             opts["ffmpeg_location"] = ffmpeg
 
-        # Audio-only: extract to mp3 (requires ffmpeg; falls back to source ext).
+        # Audio-only: extract to the chosen audio codec (requires ffmpeg;
+        # falls back to source ext). Honors the item's ext (mp3/m4a/opus/wav).
         if self.item.audio_only:
+            audio_codec = (self.item.ext or "mp3").lower()
+            if audio_codec not in ("mp3", "m4a", "aac", "opus", "wav", "flac", "vorbis"):
+                audio_codec = "mp3"
             opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
+                "preferredcodec": audio_codec,
                 "preferredquality": "192",
             }]
         else:
-            # Prefer mp4 output, but let yt-dlp fall back to a compatible
-            # container (e.g. mkv) when the chosen codecs can't be muxed into it.
+            # Prefer the chosen container (mp4/webm/mkv), but let yt-dlp fall
+            # back to a compatible one when the codecs can't be muxed into it.
             # Forcing a mismatched container is what causes "Conversion failed".
-            opts["merge_output_format"] = "mp4/mkv/webm"
+            container = (self.item.ext or "mp4").lower()
+            if container not in ("mp4", "mkv", "webm"):
+                container = "mp4"
+            fallbacks = [c for c in ("mp4", "mkv", "webm") if c != container]
+            opts["merge_output_format"] = "/".join([container] + fallbacks)
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(self.item.url, download=True)
+                final = ""
                 if info:
                     self.item.title = info.get("title", self.item.title)
                     final = self._resolve_final_path(ydl, info)
                     self.item.filename = os.path.basename(final)
                     self.item.save_dir = os.path.dirname(final) or self.item.save_dir
+
+            # Trust the file on disk for the final size. yt-dlp fires no progress
+            # hooks when it skips an already-downloaded file (leaving totals at 0),
+            # and the post-merge size differs from any single stream's size.
+            if final and os.path.exists(final):
+                size = os.path.getsize(final)
+                if size > 0:
+                    self.item.total_bytes = size
+                    self.item.downloaded_bytes = size
+            else:
+                # No output file exists — treat as a failure rather than a
+                # phantom "completed" with nothing saved.
+                raise RuntimeError("yt-dlp reported success but no file was written")
+
             self.item.status = Status.COMPLETED
             self.item.downloaded_bytes = self.item.total_bytes or self.item.downloaded_bytes
             self.item.speed = 0.0

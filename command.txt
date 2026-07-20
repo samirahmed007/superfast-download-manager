@@ -1,0 +1,116 @@
+===============================================================================
+ Superfast Download Manager - Build / Package Instructions
+ Developer: Samir Uddin Ahmed
+===============================================================================
+
+These commands turn the Python source into a standalone Windows executable that
+runs on any PC WITHOUT Python or any dependency installed, and into a
+double-click Setup installer for distribution.
+
+-------------------------------------------------------------------------------
+ 0. ONE-TIME SETUP (developer machine only)
+-------------------------------------------------------------------------------
+Install Python 3.10+ (64-bit) from https://www.python.org/downloads/
+(During install, tick "Add Python to PATH".)
+
+Open a terminal (CMD / PowerShell / Git Bash) in this project folder and run:
+
+    python -m pip install --upgrade pip
+    python -m pip install -r requirements.txt
+    python -m pip install pyinstaller
+
+(Optional) regenerate the app icon - only if assets/icon.ico is missing:
+    python -m pip install pillow
+    python tools/make_icon.py
+
+
+-------------------------------------------------------------------------------
+ 1. SINGLE-FILE EXE  (one portable .exe, easiest to share)
+-------------------------------------------------------------------------------
+Build using the bundled spec (icon + assets already configured):
+
+    pyinstaller superfast.spec --clean --noconfirm
+
+Result:
+    dist\onefile\SuperfastDownloadManager.exe
+
+That single .exe is fully portable - copy it to any Windows PC and double-click.
+First launch takes a few seconds while it unpacks internally.
+
+
+-------------------------------------------------------------------------------
+ 2. ONE-DIR BUILD  (faster startup; a folder, and the input for the installer)
+-------------------------------------------------------------------------------
+    pyinstaller superfast-onedir.spec --clean --noconfirm
+
+Result:
+    dist\onedir\SuperfastDownloadManager\SuperfastDownloadManager.exe
+Ship the WHOLE "SuperfastDownloadManager" folder (zip it to share), OR feed it
+to Inno Setup (step 3) to produce a proper installer.
+
+
+-------------------------------------------------------------------------------
+ 3. INSTALLER (.exe Setup) with Inno Setup
+-------------------------------------------------------------------------------
+Requires the one-dir build from step 2 first (the installer packages that
+folder). Inno Setup 6 must be installed.
+
+    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+Result:
+    installer_output\SuperfastDownloadManager-Setup-1.0.0.exe
+
+That Setup .exe is the final distributable: it installs the app (Start Menu
+shortcut, optional desktop icon, optional run-at-startup), registers a clean
+uninstaller, and requires no admin rights (per-user install by default).
+
+
+-------------------------------------------------------------------------------
+ 4. MANUAL ONE-LINERS (no spec file, if you prefer)
+-------------------------------------------------------------------------------
+Single file:
+    pyinstaller --onefile --windowed --name SuperfastDownloadManager ^
+        --icon assets/icon.ico ^
+        --add-data "assets;assets" ^
+        --collect-all yt_dlp ^
+        main.py
+
+One dir:
+    pyinstaller --onedir --windowed --name SuperfastDownloadManager ^
+        --icon assets/icon.ico ^
+        --add-data "assets;assets" ^
+        --collect-all yt_dlp ^
+        main.py
+
+Notes:
+  * --onefile / --onedir  -> one .exe  /  a folder
+  * --windowed            -> no console window (GUI app)
+  * --icon                -> sets the .exe file icon
+  * --add-data            -> bundles the assets folder (icon). On macOS/Linux
+                             the separator is a colon:  --add-data "assets:assets"
+  * --collect-all yt_dlp  -> pulls in all of yt-dlp's hidden data/extractors
+
+
+-------------------------------------------------------------------------------
+ 5. OPTIONAL - bundle ffmpeg so media merges work on any PC
+-------------------------------------------------------------------------------
+yt-dlp needs ffmpeg to merge separate video+audio streams and to extract MP3.
+To make the build fully self-contained, add ffmpeg.exe to the bundle by editing
+the spec's `binaries=[]` line, e.g.:
+
+    binaries=[('C:/path/to/ffmpeg.exe', '.')],
+
+Without bundled ffmpeg the app still works; it uses ffmpeg from PATH or the
+SDM_FFMPEG environment variable if present, otherwise falls back to a single
+pre-muxed stream.
+
+
+-------------------------------------------------------------------------------
+ 6. CLEANUP
+-------------------------------------------------------------------------------
+    rmdir /s /q build dist
+
+Distributable artifacts:
+  * Portable exe : dist\onefile\SuperfastDownloadManager.exe
+  * Installer    : installer_output\SuperfastDownloadManager-Setup-1.0.0.exe
+===============================================================================

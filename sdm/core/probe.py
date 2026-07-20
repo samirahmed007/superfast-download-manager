@@ -13,7 +13,7 @@ from urllib.parse import urlparse, unquote
 
 import requests
 
-from .models import Format, Kind
+from .models import Format, Kind, sanitize_filename
 from .manager import guess_kind
 
 USER_AGENT = (
@@ -58,6 +58,56 @@ def probe(url: str) -> ProbeResult:
     return result
 
 
+@dataclass
+class PlaylistEntry:
+    url: str
+    title: str = ""
+
+
+def probe_playlist(url: str, limit: int = 200) -> tuple[list[PlaylistEntry], str]:
+    """Enumerate a playlist/channel URL into individual video URLs.
+
+    Uses yt-dlp in flat mode (no per-entry extraction) so this stays fast even
+    for large playlists. Returns (entries, error). A non-playlist URL comes
+    back as a single entry so callers can treat everything uniformly.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        return [], "yt-dlp is not installed"
+
+    opts = {
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "extract_flat": "in_playlist", "playlistend": limit,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:  # noqa: BLE001
+        return [], str(e).strip().splitlines()[-1] if str(e) else "probe failed"
+
+    if not info:
+        return [], "no metadata returned"
+    entries = info.get("entries")
+    if not entries:
+        # a single video, not a playlist
+        return [PlaylistEntry(url=url, title=info.get("title") or "")], ""
+
+    out: list[PlaylistEntry] = []
+    for e in entries:
+        if not e:
+            continue
+        eu = e.get("url") or e.get("webpage_url") or e.get("id")
+        if not eu:
+            continue
+        # flat entries often give a bare id or relative ref; keep full URLs,
+        # otherwise let yt-dlp resolve the id later via the original extractor.
+        if not eu.startswith("http"):
+            eu = e.get("webpage_url") or eu
+        out.append(PlaylistEntry(url=eu, title=e.get("title") or ""))
+    return out, ""
+
+
 def _probe_http(url: str) -> ProbeResult:
     res = ProbeResult(url=url, kind=Kind.HTTP)
     try:
@@ -72,7 +122,9 @@ def _probe_http(url: str) -> ProbeResult:
         if "filename=" in cd:
             res.suggested_name = unquote(cd.split("filename=")[-1].strip().strip('"; '))
         if not res.suggested_name:
-            res.suggested_name = unquote(os.path.basename(urlparse(r.url).path)) or "download"
+            res.suggested_name = unquote(os.path.basename(urlparse(r.url).path))
+        # Servers may send a path or illegal chars; keep only a safe leaf name.
+        res.suggested_name = sanitize_filename(res.suggested_name)
         res.title = res.suggested_name
         ext = os.path.splitext(res.suggested_name)[1].lstrip(".").lower() or "bin"
         res.formats = [Format(

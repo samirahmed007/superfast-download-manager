@@ -13,7 +13,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QCheckBox, QSpinBox, QFileDialog, QWidget,
-    QSizePolicy,
+    QSizePolicy, QScrollArea, QRadioButton, QButtonGroup, QFrame,
 )
 
 import requests
@@ -45,13 +45,14 @@ class _ProbeWorker(QObject):
 
 class AddDialog(QDialog):
     def __init__(self, parent, default_dir: str, default_connections: int,
-                 initial_url: str = ""):
+                 initial_url: str = "", cfg=None):
         super().__init__(parent)
         self.setWindowTitle("Add Download")
         self.setMinimumWidth(620)
         self.result_item: DownloadItem | None = None
         self._probe: ProbeResult | None = None
         self._default_conn = default_connections
+        self._cfg = cfg
         self._thread: QThread | None = None
 
         root = QVBoxLayout(self)
@@ -89,22 +90,58 @@ class AddDialog(QDialog):
         meta.addLayout(info_col, 1)
         root.addLayout(meta)
 
+        # Output type toggle (Video / Audio) — mirrors the web app.
+        type_row = QHBoxLayout()
+        type_row.setSpacing(8)
+        self.video_btn = QPushButton("🎬  Video (MP4)")
+        self.audio_btn = QPushButton("🎵  Audio (MP3)")
+        for b in (self.video_btn, self.audio_btn):
+            b.setCheckable(True)
+            b.setObjectName("typeToggle")
+            b.setCursor(Qt.PointingHandCursor)
+            type_row.addWidget(b)
+        self.video_btn.setChecked(True)
+        self.video_btn.clicked.connect(lambda: self._set_audio_mode(False))
+        self.audio_btn.clicked.connect(lambda: self._set_audio_mode(True))
+        # hidden state flag replacing the old checkbox
+        self.audio_only = QCheckBox()
+        self.audio_only.setVisible(False)
+        root.addLayout(type_row)
+
+        # Available qualities — a scrollable grid of selectable rows.
+        self.quality_header = QLabel("Available qualities")
+        self.quality_header.setStyleSheet("color:#9aa0aa;font-size:11px;")
+        root.addWidget(self.quality_header)
+        self._fmt_group = QButtonGroup(self)
+        self._fmt_scroll = QScrollArea()
+        self._fmt_scroll.setObjectName("scrollArea")
+        self._fmt_scroll.setWidgetResizable(True)
+        self._fmt_scroll.setMinimumHeight(160)
+        self._fmt_scroll.setMaximumHeight(260)
+        self._fmt_host = QWidget()
+        self._fmt_layout = QVBoxLayout(self._fmt_host)
+        self._fmt_layout.setContentsMargins(2, 2, 2, 2)
+        self._fmt_layout.setSpacing(6)
+        self._fmt_layout.addStretch(1)
+        self._fmt_scroll.setWidget(self._fmt_host)
+        root.addWidget(self._fmt_scroll)
+        self._fmt_buttons: list[QRadioButton] = []
+
+        # start in audio-only mode when the configured default format is mp3
+        if cfg is not None and cfg.default_ext == "mp3":
+            self._set_audio_mode(True)
+
         # quality + options grid
         grid = QGridLayout()
-        grid.addWidget(QLabel("Quality:"), 0, 0)
-        self.quality = QComboBox()
-        self.quality.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        grid.addWidget(self.quality, 0, 1, 1, 3)
-
-        self.audio_only = QCheckBox("Audio only (MP3)")
-        self.audio_only.stateChanged.connect(self._on_audio_toggled)
-        grid.addWidget(self.audio_only, 1, 1)
-
         grid.addWidget(QLabel("Priority:"), 2, 0)
         self.priority = QComboBox()
         for p in Priority:
             self.priority.addItem(p.value.capitalize(), p)
-        self.priority.setCurrentIndex(2)  # normal
+        # honor the configured default priority (falls back to normal)
+        default_pri = getattr(cfg, "default_priority", "normal") if cfg else "normal"
+        idx = next((i for i, p in enumerate(Priority)
+                    if p.value == default_pri), 2)
+        self.priority.setCurrentIndex(idx)
         grid.addWidget(self.priority, 2, 1)
 
         grid.addWidget(QLabel("Category:"), 2, 2)
@@ -117,6 +154,15 @@ class AddDialog(QDialog):
         self.conn.setRange(1, 32)
         self.conn.setValue(default_connections)
         grid.addWidget(self.conn, 3, 1)
+
+        # Optional integrity checksum (direct files). "algo:hex" or bare hex.
+        grid.addWidget(QLabel("Checksum:"), 3, 2)
+        self.checksum_edit = QLineEdit()
+        self.checksum_edit.setPlaceholderText("optional — sha256:… or md5:…")
+        self.checksum_edit.setToolTip(
+            "Verify the finished file against this checksum.\n"
+            "Format: algo:hexdigest (e.g. sha256:ab12…) or a bare hex digest.")
+        grid.addWidget(self.checksum_edit, 3, 3)
         root.addLayout(grid)
 
         # save dir
@@ -141,6 +187,10 @@ class AddDialog(QDialog):
         cancel.clicked.connect(self.reject)
         self.add_btn = QPushButton("Add Download")
         self.add_btn.setObjectName("primary")
+        self.add_btn.setToolTip("Add this download  (Enter)")
+        # Make it the dialog's default button so Enter triggers it once focused.
+        self.add_btn.setDefault(True)
+        self.add_btn.setAutoDefault(True)
         self.add_btn.clicked.connect(self._accept)
         btns.addWidget(cancel)
         btns.addWidget(self.add_btn)
@@ -170,7 +220,9 @@ class AddDialog(QDialog):
         if result.error:
             self.status_lbl.setText(f"⚠ {result.error[:90]}")
         else:
-            self.status_lbl.setText("Ready. Pick a quality and add.")
+            self.status_lbl.setText("Ready. Press Enter or click Add Download.")
+            # Fetch succeeded: move focus to Add so Enter adds immediately.
+            self.add_btn.setFocus()
         self.title_lbl.setText(result.title or result.suggested_name or result.url)
         subs = []
         if result.uploader:
@@ -188,14 +240,124 @@ class AddDialog(QDialog):
         if result.kind == Kind.MEDIA:
             self.category.setCurrentText("Media")
 
+    def _clear_formats(self):
+        for b in self._fmt_buttons:
+            b.setParent(None)
+            b.deleteLater()
+        self._fmt_buttons.clear()
+        # remove any group-header labels / separators too (keep the stretch)
+        while self._fmt_layout.count() > 1:
+            it = self._fmt_layout.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+    def _group_by_resolution(self, formats):
+        """Group formats by resolution key, sorted highest-first (web parity)."""
+        groups: dict[str, list] = {}
+        for f in formats:
+            if not f.has_video:
+                continue
+            key = f.resolution or (f"{f.height}p" if f.height else "video")
+            groups.setdefault(key, []).append(f)
+
+        def sort_key(k):
+            digits = "".join(ch for ch in k if ch.isdigit())
+            return -(int(digits) if digits else -1)
+        return [(k, groups[k]) for k in sorted(groups, key=sort_key)]
+
+    def _pick_group_best(self, group):
+        """Choose the representative format for a resolution row.
+
+        Prefer one that already has audio (no merge needed), then larger size.
+        """
+        return sorted(group, key=lambda f: (0 if f.has_audio else 1,
+                                            -(f.filesize or 0)))[0]
+
     def _populate_quality(self, result: ProbeResult):
-        self.quality.clear()
-        if result.best_format:
-            self.quality.addItem(f"Best available ({result.best_format.label})", "auto")
-        for f in result.formats:
-            self.quality.addItem(f.label, f.format_id)
-        if self.quality.count() == 0:
-            self.quality.addItem("Default", "auto")
+        self._clear_formats()
+        self._result_formats = result.formats
+
+        if result.kind != Kind.MEDIA:
+            # Direct file: a single row describing the file.
+            f = result.best_format
+            label = "Direct download"
+            sub = result.suggested_name or result.url
+            if result.total_bytes:
+                sub = f"{sub}  ·  {fmt_bytes(result.total_bytes)}"
+            self._add_format_row("direct", label, sub, recommended=True,
+                                 checked=True)
+            self._set_audio_mode(False, allow_audio=False)
+            return
+
+        self._set_audio_mode(self.audio_only.isChecked(), allow_audio=True)
+        self._rebuild_video_rows(result)
+
+    def _rebuild_video_rows(self, result: ProbeResult):
+        self._clear_formats()
+        groups = self._group_by_resolution(result.formats)
+        self.quality_header.setText(f"Available qualities ({len(groups)})")
+        pref = (getattr(self._cfg, "default_resolution", "best")
+                if self._cfg else "best")
+        pref_h = pref.rstrip("p") if pref and pref != "best" else ""
+
+        chosen_btn = None
+        # the recommended format = best combined video+audio (matches web app)
+        best_id = result.best_format.format_id if result.best_format else None
+        for key, group in groups:
+            best = self._pick_group_best(group)
+            av = "video+audio" if best.has_audio else "video only"
+            recommended = (best.format_id == best_id)
+            bits = [av, best.ext.upper()]
+            if best.filesize:
+                bits.append(fmt_bytes(best.filesize))
+            if best.note:
+                bits.append(best.note)
+            row = self._add_format_row(
+                best.format_id, key, "  ·  ".join(bits),
+                recommended=recommended)
+            digits = "".join(ch for ch in key if ch.isdigit())
+            if pref_h and digits == pref_h:
+                chosen_btn = row
+            elif chosen_btn is None and recommended:
+                chosen_btn = row
+        if chosen_btn is None and self._fmt_buttons:
+            chosen_btn = self._fmt_buttons[0]
+        if chosen_btn:
+            chosen_btn.setChecked(True)
+
+    def _add_format_row(self, fmt_id, title, subtitle, recommended=False,
+                        checked=False) -> QRadioButton:
+        card = QFrame()
+        card.setObjectName("fmtRow")
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(10)
+        radio = QRadioButton()
+        radio.setProperty("fmt_id", fmt_id)
+        self._fmt_group.addButton(radio)
+        self._fmt_buttons.append(radio)
+        lay.addWidget(radio, 0, Qt.AlignVCenter)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        head = QLabel(title + ("   ★ recommended" if recommended else ""))
+        head.setStyleSheet("font-weight:600;")
+        sub = QLabel(subtitle)
+        sub.setStyleSheet("color:#9aa0aa;font-size:11px;")
+        text_col.addWidget(head)
+        text_col.addWidget(sub)
+        lay.addLayout(text_col, 1)
+        # click anywhere on the row selects it
+        card.mousePressEvent = lambda _e, r=radio: r.setChecked(True)
+
+        def _sync(on, c=card):
+            c.setProperty("selected", bool(on))
+            c.style().unpolish(c)
+            c.style().polish(c)
+        radio.toggled.connect(_sync)
+        self._fmt_layout.insertWidget(self._fmt_layout.count() - 1, card)
+        if checked:
+            radio.setChecked(True)
+        return radio
 
     def _load_thumb(self, url: str):
         if not url:
@@ -213,8 +375,24 @@ class AddDialog(QDialog):
             pass
         self.thumb.setText("no preview")
 
-    def _on_audio_toggled(self, state):
-        self.quality.setEnabled(not self.audio_only.isChecked())
+    def _set_audio_mode(self, audio: bool, allow_audio: bool = True):
+        """Switch between Video and Audio output. In audio mode the quality
+        list collapses to a single 'best audio' row (like the web app)."""
+        self.audio_only.setChecked(audio)
+        self.video_btn.setChecked(not audio)
+        self.audio_btn.setChecked(audio)
+        self.audio_btn.setEnabled(allow_audio)
+        if audio:
+            ext = (getattr(self._cfg, "default_audio_ext", "mp3")
+                   if self._cfg else "mp3")
+            self._clear_formats()
+            self.quality_header.setText("Audio output")
+            self._add_format_row(
+                "audio-only", f"{ext.upper()} Audio — best quality",
+                "Extracts the audio track. No video.",
+                recommended=True, checked=True)
+        elif getattr(self, "_probe", None) and self._probe.kind == Kind.MEDIA:
+            self._rebuild_video_rows(self._probe)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Choose folder", self.dir_edit.text())
@@ -230,21 +408,39 @@ class AddDialog(QDialog):
         p = self._probe
         from ..core.manager import guess_kind
         kind = p.kind if p else guess_kind(url)
-        fmt_id = self.quality.currentData() or "auto"
+
+        audio = self.audio_only.isChecked()
+        # read the selected quality row
+        checked = self._fmt_group.checkedButton()
+        fmt_id = checked.property("fmt_id") if checked else "auto"
+        if fmt_id in (None, "", "direct", "audio-only"):
+            fmt_id = "auto"
         chosen = None
-        if p:
-            chosen = next((f for f in p.formats if f.format_id == fmt_id), p.best_format)
+        if p and fmt_id != "auto":
+            chosen = next((f for f in p.formats if f.format_id == fmt_id), None)
+        if chosen is None and p:
+            chosen = p.best_format
 
         cat = self.category.currentText()
+        # "Auto" → derive from the file's extension / media kind.
+        if cat == "Auto":
+            from ..core.models import categorize
+            name = ""
+            if p and p.kind == Kind.HTTP and p.suggested_name:
+                name = p.suggested_name
+            resolved_cat = categorize(name, url, is_media=(kind == Kind.MEDIA))
+        else:
+            resolved_cat = cat
         item = DownloadItem(
             url=url,
             save_dir=self.dir_edit.text().strip(),
             connections=self.conn.value(),
             kind=kind,
             priority=Priority(self.priority.currentData()),
-            category="" if cat == "Auto" else cat,
+            category=resolved_cat,
             format_id="" if fmt_id == "auto" else fmt_id,
-            audio_only=self.audio_only.isChecked(),
+            audio_only=audio,
+            checksum=self.checksum_edit.text().strip(),
         )
         if p:
             item.title = p.title
@@ -256,8 +452,12 @@ class AddDialog(QDialog):
                 item.filename = p.suggested_name
             if p.total_bytes:
                 item.total_bytes = p.total_bytes
-        if chosen:
-            item.ext = "mp3" if self.audio_only.isChecked() else chosen.ext
+        audio_ext = (getattr(self._cfg, "default_audio_ext", "mp3")
+                     if self._cfg else "mp3")
+        if audio:
+            item.ext = audio_ext
+        elif chosen:
+            item.ext = chosen.ext
             item.resolution = chosen.resolution
             if chosen.filesize and not item.total_bytes:
                 item.total_bytes = chosen.filesize

@@ -19,7 +19,8 @@ from ..core.config import Config, DB_PATH
 from ..core.manager import DownloadManager
 from ..core.models import DownloadItem, Status, Priority
 from ..core.store import Store
-from .util import DARK_QSS, fmt_speed, MUTED
+from .util import fmt_speed, muted
+from . import theme
 from .sidebar import Sidebar
 from .stat_cards import StatCards
 from .download_card import DownloadCard
@@ -27,6 +28,7 @@ from .thumb_loader import ThumbnailLoader
 from .settings_dialog import SettingsDialog
 from .clipboard_watch import ClipboardWatcher
 from .scheduler import Scheduler
+from .log_panel import LogPanel
 
 
 class ProgressBridge(QObject):
@@ -68,13 +70,16 @@ class MainWindow(QMainWindow):
         self._active_filter = "all"
         self._active_category = None
         self._search = ""
+        self._selected_ids: set[str] = set()   # ids of selected cards
+        self._anchor_id: str | None = None      # for shift-range selection
 
         self.thumbs = ThumbnailLoader(self)
         self.thumbs.loaded.connect(self._on_thumb)
 
         self.setWindowTitle("Superfast Download Manager")
         self.resize(1180, 720)
-        self.setStyleSheet(DARK_QSS)
+        self._set_window_icon()
+        self._apply_theme(self.cfg.theme, persist=False)
 
         self._build_ui()
 
@@ -99,6 +104,114 @@ class MainWindow(QMainWindow):
             lambda is_open: self.manager.set_schedule_hold(not is_open))
         self.scheduler.configure(self.cfg.schedule_enabled,
                                  self.cfg.schedule_start, self.cfg.schedule_stop)
+
+        self._build_menus()
+
+    # ---- window chrome --------------------------------------------------
+    def _set_window_icon(self):
+        """Load the bundled app icon; harmless if the asset is missing."""
+        import sys
+        from PySide6.QtGui import QIcon
+        # When frozen by PyInstaller, assets live under sys._MEIPASS; from
+        # source, the project root is three levels up from this file.
+        root = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))))
+        for name in ("icon.ico", "icon.png"):
+            path = os.path.join(root, "assets", name)
+            if os.path.exists(path):
+                self.setWindowIcon(QIcon(path))
+                return
+
+    # ---- menu bar -------------------------------------------------------
+    def _build_menus(self):
+        """Application menu bar: File / Edit / View / Help."""
+        from PySide6.QtGui import QAction, QKeySequence
+
+        bar = self.menuBar()
+
+        def act(menu, text, slot, shortcut=None, tip=""):
+            a = QAction(text, self)
+            if shortcut:
+                a.setShortcut(QKeySequence(shortcut))
+            if tip:
+                a.setStatusTip(tip)
+            a.triggered.connect(slot)
+            menu.addAction(a)
+            return a
+
+        file_menu = bar.addMenu("&File")
+        act(file_menu, "New Download…", lambda: self._open_add_dialog(),
+            "Ctrl+N", "Add a single download")
+        act(file_menu, "Batch / Playlist Add…", self._open_batch_dialog,
+            "Ctrl+Shift+N", "Add many URLs or expand a playlist")
+        act(file_menu, "Paste URL + Add", self._paste_and_add, "Ctrl+V")
+        file_menu.addSeparator()
+        act(file_menu, "Settings…", self._open_settings, "Ctrl+,")
+        file_menu.addSeparator()
+        act(file_menu, "Exit", self.close, "Ctrl+Q")
+
+        edit_menu = bar.addMenu("&Edit")
+        act(edit_menu, "Select All", self._select_all_visible, "Ctrl+A")
+        act(edit_menu, "Clear Selection", self._clear_selection, "Escape")
+        edit_menu.addSeparator()
+        act(edit_menu, "Resume Selected", self._resume_selected, "Ctrl+Return")
+        act(edit_menu, "Pause Selected", self._pause_selected, "Ctrl+P")
+        act(edit_menu, "Stop Selected", self._stop_selected, "Ctrl+S")
+        act(edit_menu, "Remove Selected", self._remove_selected, "Delete")
+
+        view_menu = bar.addMenu("&View")
+        act(view_menu, "Toggle Activity Log", self.log_panel.toggle, "Ctrl+L")
+        act(view_menu, "Toggle Light / Dark Theme", self._toggle_theme, "Ctrl+D")
+        act(view_menu, "Focus Search", lambda: self.search_input.setFocus(),
+            "Ctrl+F")
+
+        help_menu = bar.addMenu("&Help")
+        act(help_menu, "Keyboard Shortcuts", self._show_shortcuts, "F1")
+        act(help_menu, "About Superfast Download Manager", self._show_about)
+
+    def _show_shortcuts(self):
+        rows = [
+            ("Ctrl+N", "New download"),
+            ("Ctrl+Shift+N", "Batch / playlist add"),
+            ("Ctrl+V", "Paste URL and add"),
+            ("Ctrl+F", "Focus search"),
+            ("Ctrl+A", "Select all downloads"),
+            ("Esc", "Clear selection"),
+            ("Ctrl+Enter", "Resume / start selected"),
+            ("Ctrl+P", "Pause selected"),
+            ("Ctrl+S", "Stop selected (discard partial)"),
+            ("Delete", "Remove selected from list"),
+            ("Ctrl+L", "Toggle activity log"),
+            ("Ctrl+D", "Toggle light / dark theme"),
+            ("Ctrl+,", "Open settings"),
+            ("Ctrl+Q", "Exit"),
+            ("F1", "This shortcuts help"),
+        ]
+        body = "".join(
+            f"<tr><td style='padding:2px 16px 2px 0;'>"
+            f"<b>{k}</b></td><td style='padding:2px 0;'>{d}</td></tr>"
+            for k, d in rows)
+        html = f"<h3>Keyboard Shortcuts</h3><table>{body}</table>"
+        box = QMessageBox(self)
+        box.setWindowTitle("Keyboard Shortcuts")
+        box.setTextFormat(Qt.RichText)
+        box.setText(html)
+        box.exec()
+
+    def _show_about(self):
+        html = (
+            "<h2>Superfast Download Manager</h2>"
+            "<p>A fast, multi-connection download manager with work-stealing "
+            "acceleration, media (yt-dlp) support, checksum verification, "
+            "scheduling, and clipboard capture.</p>"
+            "<p><b>Version:</b> 1.0.0<br>"
+            "<b>Developer:</b> Samir Uddin Ahmed</p>"
+            "<p style='color:gray;'>Built with Python & PySide6.</p>")
+        box = QMessageBox(self)
+        box.setWindowTitle("About")
+        box.setTextFormat(Qt.RichText)
+        box.setText(html)
+        box.exec()
 
     # ---- UI construction -----------------------------------------------
     def _build_ui(self):
@@ -130,6 +243,32 @@ class MainWindow(QMainWindow):
         self.stats = StatCards()
         body_l.addWidget(self.stats)
 
+        # selection action bar (hidden until one or more cards are selected)
+        self.sel_bar = QFrame()
+        self.sel_bar.setObjectName("selBar")
+        sel_l = QHBoxLayout(self.sel_bar)
+        sel_l.setContentsMargins(14, 8, 14, 8)
+        sel_l.setSpacing(10)
+        self.sel_label = QLabel("0 selected")
+        self.sel_label.setStyleSheet("font-weight: 600;")
+        sel_l.addWidget(self.sel_label)
+        sel_l.addStretch(1)
+        for text, tip, slot in (
+            ("Resume", "Resume/start selected (Ctrl+Enter)", self._resume_selected),
+            ("Pause", "Pause selected (Ctrl+P)", self._pause_selected),
+            ("Stop", "Stop selected, discard partial (Ctrl+S)", self._stop_selected),
+            ("Remove", "Remove selected (Del)", self._remove_selected),
+            ("Clear selection", "Deselect all (Esc)", self._clear_selection),
+        ):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            if text == "Remove":
+                b.setObjectName("primary")
+            b.clicked.connect(slot)
+            sel_l.addWidget(b)
+        self.sel_bar.setVisible(False)
+        body_l.addWidget(self.sel_bar)
+
         # scrollable card list
         self.scroll = QScrollArea()
         self.scroll.setObjectName("scrollArea")
@@ -146,10 +285,15 @@ class MainWindow(QMainWindow):
         # empty-state label
         self.empty_lbl = QLabel("No downloads yet. Paste a link and hit Add.")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
-        self.empty_lbl.setStyleSheet(f"color: {MUTED}; font-size: 14px;")
+        self.empty_lbl.setStyleSheet(f"color: {muted()}; font-size: 14px;")
         body_l.addWidget(self.empty_lbl)
 
         right.addWidget(body, 1)
+
+        # Bottom activity/error log panel (collapsed by default; auto-opens on error)
+        self.log_panel = LogPanel()
+        right.addWidget(self.log_panel)
+
         self.setCentralWidget(central)
 
     def _build_topbar(self) -> QWidget:
@@ -167,16 +311,30 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.search_input, 1)
 
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet(f"color: {MUTED};")
+        self.status_label.setStyleSheet(f"color: {muted()};")
         lay.addWidget(self.status_label)
         lay.addStretch(0)
 
+        self.theme_btn = QPushButton()
+        self.theme_btn.setFixedWidth(40)
+        self.theme_btn.setToolTip("Toggle light / dark theme  (Ctrl+D)")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        self._refresh_theme_btn()
+        lay.addWidget(self.theme_btn)
+
         add_url = QPushButton("Paste + Add")
+        add_url.setToolTip("Add the URL currently on the clipboard  (Ctrl+V)")
         add_url.clicked.connect(self._paste_and_add)
         lay.addWidget(add_url)
 
+        batch_btn = QPushButton("Batch")
+        batch_btn.setToolTip("Add many URLs at once, or expand a playlist  (Ctrl+Shift+N)")
+        batch_btn.clicked.connect(self._open_batch_dialog)
+        lay.addWidget(batch_btn)
+
         add_btn = QPushButton("＋  Add")
         add_btn.setObjectName("primary")
+        add_btn.setToolTip("Add a new download  (Ctrl+N)")
         add_btn.clicked.connect(lambda: self._open_add_dialog())
         lay.addWidget(add_btn)
         return bar
@@ -189,12 +347,14 @@ class MainWindow(QMainWindow):
         card = DownloadCard(item)
         card.resume.connect(self.manager.start)
         card.pause.connect(self.manager.pause)
+        card.stop.connect(self.manager.stop)
         card.cancel.connect(self.manager.cancel)
         card.remove.connect(self._remove)
         card.open_file.connect(self._open_file)
         card.open_folder.connect(self._open_folder)
         card.copy_url.connect(self._copy_url)
         card.set_priority.connect(self.manager.set_priority)
+        card.clicked.connect(self._on_card_clicked)
         self._cards[item.id] = card
         # insert before the trailing stretch
         self.list_layout.insertWidget(self.list_layout.count() - 1, card)
@@ -278,9 +438,16 @@ class MainWindow(QMainWindow):
         if text.startswith("http"):
             self._open_add_dialog(text)
 
+    def _quick_add(self, url: str):
+        """Add a URL with configured defaults, honoring auto-start."""
+        item = self.manager.add(url, priority=Priority(self.cfg.default_priority))
+        if not self.cfg.auto_start:
+            self.manager.pause(item.id)
+        return item
+
     def _on_clipboard_link(self, url: str):
         if self.cfg.clipboard_auto_add:
-            self.manager.add(url)
+            self._quick_add(url)
             self.status_label.setText(f"Auto-added: {url[:50]}")
             return
         box = QMessageBox(self)
@@ -295,19 +462,64 @@ class MainWindow(QMainWindow):
         if clicked is add:
             self._open_add_dialog(url)
         elif clicked is quick:
-            self.manager.add(url)
+            self._quick_add(url)
 
     def _open_add_dialog(self, initial_url: str = ""):
         from .add_dialog import AddDialog
         dlg = AddDialog(self, self.cfg.download_dir,
-                        self.cfg.connections_per_download, initial_url=initial_url)
+                        self.cfg.connections_per_download,
+                        initial_url=initial_url, cfg=self.cfg)
         if dlg.exec() and dlg.result_item is not None:
-            self.manager.add(item=dlg.result_item)
+            self._add_item(dlg.result_item)
+
+    def _open_batch_dialog(self):
+        from .batch_dialog import BatchDialog
+        dlg = BatchDialog(self, self.cfg.download_dir,
+                          self.cfg.connections_per_download, cfg=self.cfg)
+        if dlg.exec() and dlg.result_items:
+            for item in dlg.result_items:
+                self._add_item(item)
+            self.status_label.setText(f"Added {len(dlg.result_items)} downloads")
+
+    def _add_item(self, item: DownloadItem):
+        """Add an item, respecting the auto-start setting (else stay paused)."""
+        self.manager.add(item=item)
+        if not self.cfg.auto_start:
+            self.manager.pause(item.id)
 
     def _open_settings(self):
         dlg = SettingsDialog(self.cfg, self)
         dlg.changed.connect(self._apply_settings)
+        dlg.theme_changed.connect(lambda name: self._apply_theme(name))
         dlg.exec()
+
+    # ---- theme ----------------------------------------------------------
+    def _apply_theme(self, name: str, persist: bool = True):
+        app = QGuiApplication.instance()
+        theme.apply_theme(app, name)
+        if persist:
+            self.cfg.theme = theme.current_theme()
+            self.cfg.save()
+        if hasattr(self, "theme_btn"):
+            self._refresh_theme_btn()
+        # restyle bits that use inline colors
+        if hasattr(self, "empty_lbl"):
+            self.empty_lbl.setStyleSheet(f"color: {muted()}; font-size: 14px;")
+        if hasattr(self, "status_label"):
+            self.status_label.setStyleSheet(f"color: {muted()};")
+        for card in getattr(self, "_cards", {}).values():
+            card.restyle()
+        if hasattr(self, "log_panel"):
+            self.log_panel.restyle()
+
+    def _refresh_theme_btn(self):
+        dark = theme.resolved_theme() == "dark"
+        # show the icon of the theme you'd switch TO
+        self.theme_btn.setText("☀" if dark else "☾")
+
+    def _toggle_theme(self):
+        # Toggle flips the resolved palette to its opposite as an explicit choice.
+        self._apply_theme("light" if theme.resolved_theme() == "dark" else "dark")
 
     def _apply_settings(self):
         self.manager.default_dir = self.cfg.download_dir
@@ -321,17 +533,99 @@ class MainWindow(QMainWindow):
         if not self.cfg.schedule_enabled:
             self.manager.set_schedule_hold(False)
 
+    # ---- selection ------------------------------------------------------
+    def _on_card_clicked(self, iid, ctrl, shift):
+        """Drive multi-select: plain click selects one; Ctrl toggles; Shift
+        extends a contiguous range over the currently visible cards."""
+        visible = [c.item.id for c in self._ordered_cards() if c.isVisible()]
+        if shift and self._anchor_id in visible and iid in visible:
+            a, b = visible.index(self._anchor_id), visible.index(iid)
+            lo, hi = (a, b) if a <= b else (b, a)
+            self._selected_ids = set(visible[lo:hi + 1])
+        elif ctrl:
+            self._selected_ids.symmetric_difference_update({iid})
+            self._anchor_id = iid
+        else:
+            self._selected_ids = {iid}
+            self._anchor_id = iid
+        self._sync_selection()
+
+    def _ordered_cards(self):
+        cards = []
+        for i in range(self.list_layout.count()):
+            w = self.list_layout.itemAt(i).widget()
+            if isinstance(w, DownloadCard):
+                cards.append(w)
+        return cards
+
+    def _sync_selection(self):
+        for iid, card in self._cards.items():
+            card.set_selected(iid in self._selected_ids)
+        self._update_selbar()
+
+    def _clear_selection(self):
+        self._selected_ids.clear()
+        self._anchor_id = None
+        self._sync_selection()
+
+    def _select_all_visible(self):
+        self._selected_ids = {c.item.id for c in self._cards.values()
+                              if c.isVisible()}
+        self._sync_selection()
+
+    def _update_selbar(self):
+        n = len(self._selected_ids)
+        self.sel_bar.setVisible(n > 0)
+        if n:
+            self.sel_label.setText(f"{n} selected")
+
+    def _select_all(self):
+        self._select_all_visible()
+
+    def _selected_or_empty(self):
+        return [i for i in self._selected_ids if i in self._cards]
+
+    def _resume_selected(self):
+        for iid in self._selected_or_empty():
+            self.manager.start(iid)
+
+    def _pause_selected(self):
+        for iid in self._selected_or_empty():
+            self.manager.pause(iid)
+
+    def _stop_selected(self):
+        for iid in self._selected_or_empty():
+            self.manager.stop(iid)
+
+    # ---- removal --------------------------------------------------------
     def _remove(self, iid):
         item = self.manager.items.get(iid)
         name = (item.display_name if item else iid) or iid
-        if QMessageBox.question(self, "Remove",
-                                f"Remove “{name}” from the list?") != QMessageBox.Yes:
+        if self.cfg.confirm_remove and QMessageBox.question(
+                self, "Remove",
+                f"Remove “{name}” from the list?") != QMessageBox.Yes:
             return
-        self.manager.remove(iid)
-        card = self._cards.pop(iid, None)
-        if card is not None:
-            self.list_layout.removeWidget(card)
-            card.deleteLater()
+        self._remove_ids([iid])
+
+    def _remove_selected(self):
+        ids = self._selected_or_empty()
+        if not ids:
+            return
+        if self.cfg.confirm_remove and QMessageBox.question(
+                self, "Remove",
+                f"Remove {len(ids)} download(s) from the list?") != QMessageBox.Yes:
+            return
+        self._remove_ids(ids)
+
+    def _remove_ids(self, ids):
+        for iid in ids:
+            self.manager.remove(iid)
+            card = self._cards.pop(iid, None)
+            if card is not None:
+                self.list_layout.removeWidget(card)
+                card.deleteLater()
+            self._selected_ids.discard(iid)
+        self._sync_selection()
         self._apply_filter()
         self._refresh_sidebar()
 

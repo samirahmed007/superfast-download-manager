@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .util import category_color, MUTED
+from .util import category_color, muted
 
 NAV_ITEMS = [
     ("all", "All Downloads"),
@@ -22,6 +22,11 @@ NAV_ITEMS = [
     ("completed", "Completed"),
     ("failed", "Failed"),
 ]
+
+# Standard categories always shown in the sidebar (even at zero count), so the
+# category rail reads as a stable set of "cards" rather than appearing only
+# once an item happens to use one.
+STANDARD_CATEGORIES = ["Software", "Media", "Documents", "Archives", "Images", "Other"]
 
 
 class Sidebar(QFrame):
@@ -33,6 +38,7 @@ class Sidebar(QFrame):
         super().__init__(parent)
         self.setObjectName("sidebar")
         self.setFixedWidth(232)
+        self._active_category = None
         self._nav_btns: dict[str, QPushButton] = {}
         self._cat_btns: list[QPushButton] = []
         self._build()
@@ -105,17 +111,34 @@ class Sidebar(QFrame):
             self._nav_btns[fid].setText(f"{label}    ({n})" if n else label)
 
     def set_categories(self, cats: list[tuple[str, int]]):
-        # clear
+        # Preserve the current selection across rebuilds so refreshing counts
+        # doesn't silently reset the active category filter.
+        prev = self._active_category
+
         while self._cat_container.count():
             it = self._cat_container.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
         self._cat_btns.clear()
 
-        all_btn = self._mk_cat("All", None, MUTED, 0)
-        all_btn.setChecked(True)
-        for name, count in cats:
-            self._mk_cat(name, name, category_color(name), count)
+        counts = dict(cats)
+        # Always show the standard set, then any extra custom categories in use.
+        names = list(STANDARD_CATEGORIES)
+        for name, _ in cats:
+            if name not in names:
+                names.append(name)
+
+        all_btn = self._mk_cat("All", None, muted(), sum(counts.values()))
+        for name in names:
+            self._mk_cat(name, name, category_color(name), counts.get(name, 0))
+
+        # restore selection (fall back to All)
+        target = None
+        for b in self._cat_btns:
+            if b.property("cat_value") == prev:
+                target = b
+                break
+        (target or all_btn).setChecked(True)
 
     def _mk_cat(self, label, value, color, count):
         b = QPushButton(f"●  {label}" + (f"    ({count})" if count else ""))
@@ -123,12 +146,14 @@ class Sidebar(QFrame):
         b.setCheckable(True)
         b.setCursor(Qt.PointingHandCursor)
         b.setStyleSheet(f"QPushButton#navItem {{ color: {color}; }}")
+        b.setProperty("cat_value", value)
         b.clicked.connect(lambda _c=False, v=value: self._pick_cat(b, v))
         self._cat_container.addWidget(b)
         self._cat_btns.append(b)
         return b
 
     def _pick_cat(self, btn, value):
+        self._active_category = value
         for b in self._cat_btns:
             b.setChecked(b is btn)
         self.category_changed.emit(value)

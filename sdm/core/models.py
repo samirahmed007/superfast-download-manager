@@ -1,11 +1,78 @@
 """Data models shared across the download engine and UI."""
 from __future__ import annotations
 
+import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional
+
+# Characters illegal in filenames on Windows (and best avoided elsewhere).
+_ILLEGAL_FN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def sanitize_filename(name: str, fallback: str = "download") -> str:
+    """Reduce an arbitrary string to a safe, single-segment filename.
+
+    Servers sometimes send Content-Disposition values containing full paths
+    (e.g. "/some/dir/file.rar"); joining such a value with the save directory
+    would silently escape it. We strip directory components and illegal
+    characters so the file always lands inside the chosen folder.
+    """
+    if not name:
+        return fallback
+    # take the last path segment regardless of separator style
+    name = name.replace("\\", "/").split("/")[-1]
+    name = _ILLEGAL_FN.sub("_", name).strip(" .")
+    # collapse whitespace runs; guard against reserved/empty results
+    name = re.sub(r"\s+", " ", name)
+    return name or fallback
+
+
+# Extension → category map for auto-categorizing direct file downloads.
+_CATEGORY_BY_EXT = {
+    # Software / installers
+    "exe": "Software", "msi": "Software", "dmg": "Software", "pkg": "Software",
+    "deb": "Software", "rpm": "Software", "apk": "Software", "appimage": "Software",
+    "bin": "Software", "run": "Software",
+    # Archives
+    "zip": "Archives", "rar": "Archives", "7z": "Archives", "tar": "Archives",
+    "gz": "Archives", "tgz": "Archives", "bz2": "Archives", "xz": "Archives",
+    "iso": "Archives", "img": "Archives", "cab": "Archives",
+    # Documents
+    "pdf": "Documents", "doc": "Documents", "docx": "Documents", "xls": "Documents",
+    "xlsx": "Documents", "ppt": "Documents", "pptx": "Documents", "txt": "Documents",
+    "rtf": "Documents", "odt": "Documents", "epub": "Documents", "mobi": "Documents",
+    "csv": "Documents",
+    # Media — video
+    "mp4": "Media", "mkv": "Media", "webm": "Media", "avi": "Media", "mov": "Media",
+    "flv": "Media", "m4v": "Media", "wmv": "Media", "mpg": "Media", "mpeg": "Media",
+    # Media — audio
+    "mp3": "Media", "flac": "Media", "wav": "Media", "m4a": "Media", "aac": "Media",
+    "ogg": "Media", "opus": "Media", "wma": "Media",
+    # Images
+    "jpg": "Images", "jpeg": "Images", "png": "Images", "gif": "Images",
+    "webp": "Images", "svg": "Images", "bmp": "Images", "tiff": "Images",
+}
+
+
+def categorize(filename: str = "", url: str = "", is_media: bool = False) -> str:
+    """Best-effort category from a filename/URL extension.
+
+    Media-site downloads (yt-dlp) are always "Media". For direct files we key
+    off the extension; unknown extensions fall back to "Other".
+    """
+    if is_media:
+        return "Media"
+    src = filename or url or ""
+    # strip query/fragment, then take the extension of the last path segment
+    src = src.split("?")[0].split("#")[0].replace("\\", "/").split("/")[-1]
+    ext = src.rsplit(".", 1)[-1].lower() if "." in src else ""
+    if not ext:
+        return "Other"
+    return _CATEGORY_BY_EXT.get(ext, "Other")
 
 
 class Status(str, Enum):
@@ -83,11 +150,17 @@ class Format:
 
 @dataclass
 class Segment:
-    """One byte range of a segmented HTTP download."""
+    """One byte range of a segmented HTTP download.
+
+    Ranges are dynamic: an idle worker may shrink a busy segment's ``end`` and
+    take over its tail (work-stealing), so ``end`` and ``total`` can change
+    while a download is in flight.
+    """
     index: int
     start: int
     end: int              # inclusive
     downloaded: int = 0
+    active: bool = False   # a worker currently owns this segment (not persisted)
 
     @property
     def total(self) -> int:
@@ -100,6 +173,11 @@ class Segment:
     @property
     def current_pos(self) -> int:
         return self.start + self.downloaded
+
+    @property
+    def remaining(self) -> int:
+        """Bytes still to fetch before this segment reaches its current end."""
+        return max(0, self.end - self.current_pos + 1)
 
 
 @dataclass
@@ -138,10 +216,22 @@ class DownloadItem:
     thumbnail: str = ""
     audio_only: bool = False      # extract audio (mp3) instead of video
 
+    # integrity
+    checksum: str = ""            # "algo:hexdigest" to verify against (optional)
+    checksum_ok: Optional[bool] = None  # None=unverified, True/False after check
+
+    # live, non-persisted: per-connection progress fractions for the segment
+    # activity view. Refreshed by the downloader; not written to the store.
+    seg_progress: list = field(default_factory=list)
+
     @property
     def filepath(self) -> str:
-        import os
-        return os.path.join(self.save_dir, self.filename) if self.filename else ""
+        if not self.filename:
+            return ""
+        # Defense in depth: never let a filename escape the save directory,
+        # even if a caller stored a path-like value.
+        safe = sanitize_filename(self.filename)
+        return os.path.join(self.save_dir, safe)
 
     @property
     def progress(self) -> float:

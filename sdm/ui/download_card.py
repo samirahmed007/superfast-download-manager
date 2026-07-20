@@ -9,36 +9,65 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtGui import QPixmap, QColor, QAction
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QProgressBar,
-    QSizePolicy,
+    QSizePolicy, QToolButton, QMenu,
 )
 
 from ..core.models import DownloadItem, Status, Priority
 from .util import (
     fmt_bytes, fmt_speed, fmt_eta, fmt_duration, fmt_relative,
-    status_color, priority_color, category_color, MUTED,
+    status_color, priority_color, category_color, muted,
 )
+from .segment_bar import SegmentBar
+from . import theme
 
 
 class DownloadCard(QFrame):
     resume = Signal(str)
     pause = Signal(str)
+    stop = Signal(str)
     cancel = Signal(str)
     remove = Signal(str)
     open_file = Signal(str)
     open_folder = Signal(str)
     copy_url = Signal(str)
     set_priority = Signal(str, object)  # (id, Priority)
+    # Emitted on a body click so the window can drive multi-select.
+    # Args: (id, ctrl_held, shift_held)
+    clicked = Signal(str, bool, bool)
 
     def __init__(self, item: DownloadItem, parent=None):
         super().__init__(parent)
         self.item = item
         self.setObjectName("downloadCard")
         self._thumb_loaded = False
+        self._selected = False
         self._build()
         self.update_item(item)
+
+    # ---- selection ------------------------------------------------------
+    def set_selected(self, on: bool):
+        if on == self._selected:
+            return
+        self._selected = on
+        self.setProperty("selected", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def is_selected(self) -> bool:
+        return self._selected
+
+    def mousePressEvent(self, event):
+        from PySide6.QtCore import Qt as _Qt
+        mods = event.modifiers()
+        self.clicked.emit(
+            self.item.id,
+            bool(mods & _Qt.ControlModifier),
+            bool(mods & _Qt.ShiftModifier),
+        )
+        super().mousePressEvent(event)
 
     # ---- construction ---------------------------------------------------
     def _build(self):
@@ -66,9 +95,20 @@ class DownloadCard(QFrame):
         self.title.setWordWrap(False)
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         title_row.addWidget(self.title, 1)
-        self.priority_lbl = QLabel()
-        self.priority_lbl.setObjectName("badge")
-        title_row.addWidget(self.priority_lbl, 0, Qt.AlignRight)
+        # Priority: a compact dropdown button, click to change (like the web app).
+        self.priority_btn = QToolButton()
+        self.priority_btn.setObjectName("priorityBtn")
+        self.priority_btn.setCursor(Qt.PointingHandCursor)
+        self.priority_btn.setPopupMode(QToolButton.InstantPopup)
+        self.priority_btn.setToolTip("Change priority")
+        self._priority_menu = QMenu(self.priority_btn)
+        for p in Priority:
+            act = QAction(p.value.capitalize(), self._priority_menu)
+            act.setData(p)
+            act.triggered.connect(lambda _c=False, pr=p: self._pick_priority(pr))
+            self._priority_menu.addAction(act)
+        self.priority_btn.setMenu(self._priority_menu)
+        title_row.addWidget(self.priority_btn, 0, Qt.AlignRight)
         col.addLayout(title_row)
 
         # Badges / meta row
@@ -84,6 +124,11 @@ class DownloadCard(QFrame):
         self.bar.setFixedHeight(8)
         col.addWidget(self.bar)
 
+        # Live per-connection activity strip (visible only while downloading)
+        self.seg_bar = SegmentBar()
+        self.seg_bar.setVisible(False)
+        col.addWidget(self.seg_bar)
+
         # Stats line
         self.stats = QLabel()
         self.stats.setObjectName("meta")
@@ -96,13 +141,52 @@ class DownloadCard(QFrame):
         col.addLayout(self.actions)
         self._buttons: dict[str, QPushButton] = {}
 
-    def _mk_btn(self, key: str, label: str, slot, primary=False):
+    def _mk_btn(self, key: str, label: str, slot, primary=False, tooltip=""):
         b = QPushButton(label)
         if primary:
             b.setObjectName("primary")
         b.setCursor(Qt.PointingHandCursor)
+        if tooltip:
+            b.setToolTip(tooltip)
         b.clicked.connect(slot)
         return b
+
+    def _pick_priority(self, p: Priority):
+        if p != self.item.priority:
+            self.set_priority.emit(self.item.id, p)
+
+    # ---- context menu ---------------------------------------------------
+    def contextMenuEvent(self, event):
+        """Right-click menu: copy link, change priority, and quick actions."""
+        item = self.item
+        iid = item.id
+        menu = QMenu(self)
+
+        copy = menu.addAction("Copy link")
+        copy.triggered.connect(lambda: self.copy_url.emit(iid))
+
+        pr_menu = menu.addMenu("Set priority")
+        for p in Priority:
+            act = pr_menu.addAction(
+                ("● " if p == item.priority else "   ") + p.value.capitalize())
+            act.triggered.connect(lambda _c=False, pr=p: self._pick_priority(pr))
+
+        menu.addSeparator()
+        st = item.status
+        if st in (Status.DOWNLOADING, Status.CONNECTING, Status.QUEUED):
+            menu.addAction("Pause").triggered.connect(lambda: self.pause.emit(iid))
+            menu.addAction("Stop").triggered.connect(lambda: self.stop.emit(iid))
+        if st in (Status.PAUSED, Status.ERROR, Status.CANCELLED):
+            label = "Restart" if st == Status.CANCELLED else "Resume"
+            menu.addAction(label).triggered.connect(lambda: self.resume.emit(iid))
+        if st == Status.COMPLETED:
+            menu.addAction("Open file").triggered.connect(
+                lambda: self.open_file.emit(iid))
+        menu.addAction("Open folder").triggered.connect(
+            lambda: self.open_folder.emit(iid))
+        menu.addSeparator()
+        menu.addAction("Remove").triggered.connect(lambda: self.remove.emit(iid))
+        menu.exec(event.globalPos())
 
     # ---- updates --------------------------------------------------------
     def update_item(self, item: DownloadItem):
@@ -115,10 +199,21 @@ class DownloadCard(QFrame):
         self.title.setText(item.display_name or item.filename or item.url)
         self.title.setToolTip(item.title or item.url)
 
-        # priority badge
-        self.priority_lbl.setText(item.priority.value.upper())
-        self.priority_lbl.setStyleSheet(
-            f"color: {priority_color(item.priority.value)};")
+        # priority dropdown
+        pc = priority_color(item.priority.value)
+        self.priority_btn.setText(f"{item.priority.value.upper()}  ▾")
+        self.priority_btn.setStyleSheet(
+            f"QToolButton#priorityBtn {{ color: {pc}; border: 1px solid {pc}55;"
+            f" border-radius: 6px; padding: 1px 6px; font-size: 10px;"
+            f" font-weight: 700; background: transparent; }}"
+            f"QToolButton#priorityBtn::menu-indicator {{ width: 0; }}"
+            f"QToolButton#priorityBtn:hover {{ background: {pc}22; }}")
+        # mark the active choice in the menu
+        for act in self._priority_menu.actions():
+            p = act.data()
+            pval = p.value if isinstance(p, Priority) else str(p)
+            act.setText((("● " if pval == item.priority.value else "   ")
+                         + pval.capitalize()))
 
         self._rebuild_badges(item)
         self._update_thumb(item)
@@ -169,7 +264,7 @@ class DownloadCard(QFrame):
         is_audio = item.audio_only or item.ext == "mp3"
         # placeholder glyph
         self.thumb.setText("♪" if is_audio else "▶")
-        self.thumb.setStyleSheet(f"color: {MUTED}; font-size: 26px;")
+        self.thumb.setStyleSheet(f"color: {muted()}; font-size: 26px;")
 
     def set_thumbnail(self, pixmap: QPixmap):
         if pixmap and not pixmap.isNull():
@@ -189,10 +284,26 @@ class DownloadCard(QFrame):
         else:
             self.bar.setValue(int(pct * 10))
 
+        # Live per-connection strip: only while actively downloading with >1 seg.
+        segs = item.seg_progress if item.status == Status.DOWNLOADING else []
+        if len(segs) > 1:
+            self.seg_bar.set_segments(segs)
+            self.seg_bar.setVisible(True)
+        else:
+            self.seg_bar.clear()
+            self.seg_bar.setVisible(False)
+
         color = status_color(item.status.value)
+        track = theme.palette()["input"]
+        # active downloads use the brand gradient; other states use a solid
+        # status color so paused/error/completed read at a glance.
+        if item.status in (Status.DOWNLOADING, Status.CONNECTING):
+            chunk = theme.GRAD
+        else:
+            chunk = color
         self.bar.setStyleSheet(
-            "QProgressBar { background:#201e29; border:none; border-radius:5px; }"
-            f"QProgressBar::chunk {{ background:{color}; border-radius:5px; }}")
+            f"QProgressBar {{ background:{track}; border:none; border-radius:5px; }}"
+            f"QProgressBar::chunk {{ background:{chunk}; border-radius:5px; }}")
 
         # stats line
         parts = []
@@ -212,6 +323,12 @@ class DownloadCard(QFrame):
                        if item.total_bytes and item.speed else 0)
                 if eta:
                     parts.append(f"ETA {fmt_eta(eta)}")
+                n = len(item.seg_progress)
+                if n > 1:
+                    parts.append(f"{n} connections")
+        # A verified checksum earns a small badge on completed items.
+        if item.status == Status.COMPLETED and item.checksum_ok:
+            parts.append(f"<span style='color:{status_color('completed')}'>✓ verified</span>")
         parts.append(f"<b style='color:{color}'>{item.status.value}</b>")
         self.stats.setText("  ·  ".join(parts))
 
@@ -225,21 +342,37 @@ class DownloadCard(QFrame):
         st = item.status
         iid = item.id
         btns = []
-        if st in (Status.DOWNLOADING, Status.CONNECTING, Status.QUEUED):
+        active = st in (Status.DOWNLOADING, Status.CONNECTING, Status.QUEUED)
+        if active:
+            # Pause: keep partial data, resume from where it stopped.
             btns.append(self._mk_btn("pause", "Pause",
-                                     lambda: self.pause.emit(iid)))
-        if st in (Status.PAUSED, Status.ERROR):
-            btns.append(self._mk_btn("resume", "Resume",
-                                     lambda: self.resume.emit(iid), primary=True))
+                                     lambda: self.pause.emit(iid),
+                                     tooltip="Pause — keep progress"))
+            # Stop: abort and discard partial data (clean restart later).
+            btns.append(self._mk_btn("stop", "Stop",
+                                     lambda: self.stop.emit(iid),
+                                     tooltip="Stop — discard partial data"))
+        if st in (Status.PAUSED, Status.ERROR, Status.CANCELLED):
+            label = "Restart" if st == Status.CANCELLED else "Resume"
+            btns.append(self._mk_btn("resume", label,
+                                     lambda: self.resume.emit(iid), primary=True,
+                                     tooltip=f"{label} download"))
         if st == Status.COMPLETED:
             btns.append(self._mk_btn("open", "Open",
-                                     lambda: self.open_file.emit(iid), primary=True))
+                                     lambda: self.open_file.emit(iid), primary=True,
+                                     tooltip="Open file"))
         btns.append(self._mk_btn("folder", "Folder",
-                                 lambda: self.open_folder.emit(iid)))
-        if st not in (Status.COMPLETED, Status.CANCELLED):
-            btns.append(self._mk_btn("cancel", "Cancel",
-                                     lambda: self.cancel.emit(iid)))
+                                 lambda: self.open_folder.emit(iid),
+                                 tooltip="Open containing folder"))
         btns.append(self._mk_btn("remove", "Remove",
-                                 lambda: self.remove.emit(iid)))
+                                 lambda: self.remove.emit(iid),
+                                 tooltip="Remove from list (Del)"))
         for b in btns:
             self.actions.addWidget(b)
+
+    def restyle(self):
+        """Re-apply theme-dependent inline styles after a theme switch."""
+        if not self._thumb_loaded:
+            self.thumb.setStyleSheet(f"color: {muted()}; font-size: 26px;")
+        self._update_progress(self.item)
+        self.seg_bar.update()

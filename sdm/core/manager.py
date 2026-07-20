@@ -8,13 +8,15 @@ and runs it in its own worker thread. Progress is delivered via a plain callback
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Callable, Dict, List, Optional
 
+from .eventlog import LOG
 from .http_downloader import HttpDownloader
 from .media_downloader import MediaDownloader
-from .models import DownloadItem, Kind, Priority, Status
+from .models import DownloadItem, Kind, Priority, Status, categorize
 from .store import Store
 
 ProgressCb = Callable[[DownloadItem], None]
@@ -49,6 +51,8 @@ class DownloadManager:
         self._speed_limit = 0                     # global bytes/sec cap (0 = off)
         self._schedule_hold = False               # scheduler gate
         self._auto_paused: set[str] = set()       # ids paused by the scheduler
+        self._logged_status: Dict[str, Status] = {}  # last-logged state per item
+        self._removed: set[str] = set()            # ids removed; drop late callbacks
 
         self._running = True
         self._scheduler = threading.Thread(target=self._schedule_loop, daemon=True)
@@ -71,15 +75,20 @@ class DownloadManager:
             filename: str = "", priority: Priority = Priority.NORMAL,
             category: str = "", item: Optional[DownloadItem] = None) -> DownloadItem:
         if item is None:
+            k = kind or guess_kind(url)
             item = DownloadItem(
                 url=url.strip(),
                 save_dir=save_dir or self.default_dir,
                 connections=connections or self.default_connections,
-                kind=kind or guess_kind(url),
+                kind=k,
                 filename=filename,
                 priority=priority,
                 category=category,
             )
+        # Fill in a category when none was chosen, from filename/url/kind.
+        if not item.category:
+            item.category = categorize(
+                item.filename, item.url, is_media=(item.kind == Kind.MEDIA))
         with self._lock:
             self.items[item.id] = item
         self.store.upsert(item)
@@ -90,12 +99,15 @@ class DownloadManager:
     def start(self, item_id: str):
         with self._lock:
             item = self.items.get(item_id)
-            if not item or item.status.is_active() or item_id in self._queue:
+            # Ignore if already running, already queued, or a worker is still
+            # winding down (its resume-state hasn't been written yet). The
+            # scheduler re-checks admission once the old worker fully exits.
+            if (not item or item.status.is_active()
+                    or item_id in self._queue):
                 return
             item.status = Status.QUEUED
             item.error = ""
-            if item_id not in self._queue:
-                self._queue.append(item_id)
+            self._queue.append(item_id)
         self._emit(item)
         self._wake.set()
 
@@ -123,12 +135,61 @@ class DownloadManager:
             item.status = Status.CANCELLED
             self._emit(item)
 
+    def stop(self, item_id: str):
+        """Abort a download and discard any partial data + resume state.
+
+        Unlike pause (which keeps the ``.sdmpart`` for a from-where-it-stopped
+        resume), stop resets the item to a clean CANCELLED state so a later
+        start re-downloads from scratch.
+        """
+        with self._lock:
+            if item_id in self._queue:
+                self._queue.remove(item_id)
+            self._auto_paused.discard(item_id)
+            w = self._workers.get(item_id)
+            item = self.items.get(item_id)
+        if not item:
+            return
+        if w:
+            # cancel() makes the worker delete its part files on exit
+            w.cancel()
+        else:
+            self._discard_partial(item)
+            item.status = Status.CANCELLED
+            item.downloaded_bytes = 0
+            item.speed = 0.0
+            item.eta = 0.0
+            self.store.upsert(item)
+            self._emit(item)
+
+    @staticmethod
+    def _discard_partial(item: DownloadItem):
+        """Remove the .sdmpart sidecar files for a not-currently-running item."""
+        fp = item.filepath
+        if not fp:
+            return
+        for p in (fp + ".sdmpart", fp + ".sdmpart.json"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
     def remove(self, item_id: str):
+        with self._lock:
+            item = self.items.get(item_id)
+            name = item.display_name if item else item_id
+            # Mark removed BEFORE cancelling so the worker's terminal emit
+            # (CANCELLED) is suppressed and can't resurrect the card.
+            self._removed.add(item_id)
         self.cancel(item_id)
         with self._lock:
             self.items.pop(item_id, None)
             self._active.discard(item_id)
+            self._logged_status.pop(item_id, None)
+        if item is not None:
+            self._discard_partial(item)
         self.store.delete(item_id)
+        LOG.info("Removed from list", name)
 
     def set_priority(self, item_id: str, priority: Priority):
         with self._lock:
@@ -204,10 +265,18 @@ class DownloadManager:
                 t.start()
 
     def _pick_next_locked(self) -> Optional[str]:
-        """Highest priority (lowest rank), then earliest added. Caller holds lock."""
+        """Highest priority (lowest rank), then earliest added. Caller holds lock.
+
+        Skips ids whose previous worker is still winding down (still in
+        ``_active`` or ``_workers``); admitting a duplicate worker before the
+        old one writes its resume-state is what caused resumes to restart from
+        zero. Such ids stay queued and are retried on the next wake.
+        """
         best_id = None
         best_key = None
         for iid in self._queue:
+            if iid in self._active or iid in self._workers:
+                continue
             it = self.items.get(iid)
             if not it:
                 continue
@@ -236,7 +305,11 @@ class DownloadManager:
             with self._lock:
                 self._workers.pop(item.id, None)
                 self._active.discard(item.id)
-            self.store.upsert(item)
+                removed = item.id in self._removed
+                self._removed.discard(item.id)
+            # Don't re-persist a row that remove() already deleted.
+            if not removed:
+                self.store.upsert(item)
             self._wake.set()
 
     def _per_worker_limit(self) -> int:
@@ -247,9 +320,50 @@ class DownloadManager:
         return self._speed_limit // n
 
     def _emit(self, item: DownloadItem):
+        # Drop late callbacks from a worker whose item was already removed —
+        # otherwise the progress callback would resurrect its card in the UI.
+        with self._lock:
+            if item.id in self._removed:
+                return
+        # Once the real filename is known, backfill an empty category so
+        # direct-file downloads land in Software/Documents/Archives/etc.
+        if not item.category and item.filename:
+            item.category = categorize(
+                item.filename, item.url, is_media=(item.kind == Kind.MEDIA))
         if item.status.is_terminal() or item.status == Status.PAUSED:
             self.store.upsert(item)
+        self._log_transition(item)
         self._on_progress(item)
+
+    def _log_transition(self, item: DownloadItem):
+        """Emit a log entry the first time an item reaches a notable state."""
+        prev = self._logged_status.get(item.id)
+        if prev == item.status:
+            return
+        self._logged_status[item.id] = item.status
+        name = item.display_name
+        if item.status == Status.ERROR:
+            LOG.error(item.error or "Download failed", name)
+        elif item.status == Status.COMPLETED:
+            if getattr(item, "checksum", "") and item.checksum_ok:
+                LOG.info("Completed — checksum verified", name)
+            else:
+                LOG.info("Download completed", name)
+        elif item.status == Status.QUEUED:
+            # distinguish a resume (had prior progress) from a fresh/requeue
+            if prev == Status.PAUSED and item.downloaded_bytes > 0:
+                LOG.info("Resumed", name)
+            elif prev is not None:
+                LOG.info("Queued", name)
+        elif item.status == Status.CONNECTING and prev in (None, Status.QUEUED):
+            LOG.info("Connecting…", name)
+        elif item.status == Status.PAUSED and prev is not None:
+            LOG.info("Paused — progress kept, resumable", name)
+        elif item.status == Status.CANCELLED and prev is not None:
+            LOG.warn("Stopped — partial data discarded", name)
+        elif item.status == Status.DOWNLOADING and prev in (None, Status.QUEUED,
+                                                             Status.CONNECTING):
+            LOG.info("Download started", name)
 
     def shutdown(self):
         self._running = False
