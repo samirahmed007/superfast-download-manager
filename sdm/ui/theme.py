@@ -119,10 +119,10 @@ QMainWindow, QDialog {{ background: {bg}; }}
 #navGroupLabel {{ color: {muted}; font-size: 10px; font-weight: 700; }}
 QPushButton#navItem {{
     background: transparent; border: none; border-radius: 9px;
-    padding: 9px 12px; text-align: left; color: {fg_soft};
+    padding: 9px 12px; text-align: left; color: {fg}; font-weight: 500;
 }}
 QPushButton#navItem:hover {{ background: {hover}; }}
-QPushButton#navItem:checked {{ background: {g}; color: white; font-weight: 600; }}
+QPushButton#navItem:checked {{ background: {g}; color: white; font-weight: 700; }}
 
 /* Top bar */
 #topbar {{ background: {sidebar}; border-bottom: 1px solid {border}; }}

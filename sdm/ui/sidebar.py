@@ -6,13 +6,32 @@ emit the selected filter id; category buttons emit the selected category name
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QButtonGroup,
     QWidget,
 )
 
 from .util import category_color, muted
+
+
+def _dot_icon(color: str, size: int = 10) -> QIcon:
+    """A small filled circle in the given color, used as a category marker.
+
+    Rendering the color as an icon (rather than tinting the label text) keeps
+    the label readable and lets the stylesheet control text color — including
+    the white-on-gradient look when the category is selected.
+    """
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(color))
+    p.drawEllipse(0, 0, size, size)
+    p.end()
+    return QIcon(pix)
 
 NAV_ITEMS = [
     ("all", "All Downloads"),
@@ -141,11 +160,14 @@ class Sidebar(QFrame):
         (target or all_btn).setChecked(True)
 
     def _mk_cat(self, label, value, color, count):
-        b = QPushButton(f"●  {label}" + (f"    ({count})" if count else ""))
+        b = QPushButton(f"{label}" + (f"    ({count})" if count else ""))
         b.setObjectName("navItem")
         b.setCheckable(True)
         b.setCursor(Qt.PointingHandCursor)
-        b.setStyleSheet(f"QPushButton#navItem {{ color: {color}; }}")
+        # Color rides on the marker icon, not the text — so the label keeps the
+        # theme's high-contrast foreground and turns white when selected.
+        b.setIcon(_dot_icon(color))
+        b.setIconSize(QSize(10, 10))
         b.setProperty("cat_value", value)
         b.clicked.connect(lambda _c=False, v=value: self._pick_cat(b, v))
         self._cat_container.addWidget(b)
