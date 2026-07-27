@@ -39,6 +39,22 @@ class Config:
     auto_start: bool = True                # start on add, or stay paused/queued
     confirm_remove: bool = True            # ask before removing from the list
 
+    # v2: file handling
+    temp_dir: str = ""                     # where .sdmpart lives (blank = beside file)
+    preallocate: bool = True               # reserve the full size up front
+    auto_cleanup: bool = True              # delete part/temp files on cancel/error
+    auto_rename: bool = True               # rename instead of overwriting an existing file
+
+    # v2: clipboard / window behaviour
+    clipboard_auto_paste: bool = True      # prefill Add dialog from the clipboard
+    minimize_to_tray: bool = False         # minimize hides to the system tray
+    close_to_tray: bool = False            # closing hides to tray instead of quitting
+
+    # v2: network
+    http_version: str = "auto"             # auto | 1.1 | 2 | 3
+    proxy: str = ""                        # http(s)/socks proxy URL (blank = system)
+    dns_servers: str = ""                  # comma-separated custom DNS servers (best-effort)
+
     def __post_init__(self):
         if not self.download_dir:
             self.download_dir = _default_download_dir()

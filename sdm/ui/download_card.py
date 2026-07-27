@@ -311,6 +311,11 @@ class DownloadCard(QFrame):
             parts.append(f"<span style='color:{color}'>{item.error or 'failed'}</span>")
         elif item.status == Status.COMPLETED:
             parts.append(f"{fmt_bytes(item.total_bytes or item.downloaded_bytes)} total")
+            dur = item.download_duration
+            if dur:
+                parts.append(f"took {fmt_duration(dur)}")
+                if item.total_bytes and dur > 0:
+                    parts.append(f"avg {fmt_speed(item.total_bytes / dur)}")
         else:
             dl = fmt_bytes(item.downloaded_bytes)
             if item.total_bytes:

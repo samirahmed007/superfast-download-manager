@@ -8,11 +8,11 @@
 ;       That produces:  dist\onedir\SuperfastDownloadManager\
 ;    2) Compile this script:
 ;         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-;       Output:  installer_output\SuperfastDownloadManager-Setup-1.0.0.exe
+;       Output:  installer_output\SuperfastDownloadManager-Setup-2.0.0.exe
 ; ============================================================================
 
 #define MyAppName "Superfast Download Manager"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "Samir Uddin Ahmed"
 #define MyAppExeName "SuperfastDownloadManager.exe"
 ; Folder produced by the PyInstaller one-dir build:

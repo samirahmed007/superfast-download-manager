@@ -1,3 +1,9 @@
 PySide6>=6.6
 requests>=2.31
 yt-dlp>=2024.1
+
+# Optional — unlock extra engine features (the app runs fine without them):
+#   httpx[http2]  → HTTP/2 downloads (Settings ▸ Network ▸ HTTP version)
+#   dnspython     → custom DNS servers (Settings ▸ Network ▸ Custom DNS)
+httpx[http2]>=0.27
+dnspython>=2.4

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QObject, Signal, QThread
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QGuiApplication
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QCheckBox, QSpinBox, QFileDialog, QWidget,
@@ -165,6 +165,15 @@ class AddDialog(QDialog):
         grid.addWidget(self.checksum_edit, 3, 3)
         root.addLayout(grid)
 
+        # Per-download file handling: auto-rename instead of overwriting.
+        self.auto_rename = QCheckBox("Auto-rename if a file with the same name exists")
+        self.auto_rename.setChecked(
+            getattr(cfg, "auto_rename", True) if cfg is not None else True)
+        self.auto_rename.setToolTip(
+            "When the target file already exists, save as “name (1).ext” instead "
+            "of overwriting it.")
+        root.addWidget(self.auto_rename)
+
         # save dir
         dir_row = QHBoxLayout()
         dir_row.addWidget(QLabel("Save to:"))
@@ -198,6 +207,13 @@ class AddDialog(QDialog):
 
         if initial_url:
             self._fetch()
+        elif cfg is not None and getattr(cfg, "clipboard_auto_paste", False):
+            # Auto-paste a link sitting on the clipboard into the URL field.
+            clip = QGuiApplication.clipboard().text().strip()
+            if clip.startswith(("http://", "https://")) and " " not in clip:
+                self.url_edit.setText(clip)
+                self.url_edit.selectAll()
+                self.status_lbl.setText("Pasted from clipboard — press Fetch or Add.")
 
     # ---- fetch ----------------------------------------------------------
     def _fetch(self):
@@ -441,6 +457,7 @@ class AddDialog(QDialog):
             format_id="" if fmt_id == "auto" else fmt_id,
             audio_only=audio,
             checksum=self.checksum_edit.text().strip(),
+            auto_rename=self.auto_rename.isChecked(),
         )
         if p:
             item.title = p.title

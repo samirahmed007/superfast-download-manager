@@ -41,6 +41,13 @@ class DownloadManager:
         self.default_connections = default_connections
         self._max_concurrent = max(1, max_concurrent)
 
+        # v2 engine options (set via set_engine_options from the UI).
+        self.temp_dir = ""
+        self.preallocate = True
+        self.auto_cleanup = True
+        self.http_version = "auto"
+        self.proxy = ""
+
         self.items: Dict[str, DownloadItem] = {}
         self._workers: Dict[str, object] = {}     # id -> downloader instance
         self._queue: List[str] = []               # ids waiting to run
@@ -219,6 +226,28 @@ class DownloadManager:
         """Global download speed cap in bytes/sec (0 = unlimited)."""
         self._speed_limit = max(0, bytes_per_sec)
 
+    def set_engine_options(self, *, temp_dir: str = "", preallocate: bool = True,
+                           auto_cleanup: bool = True, http_version: str = "auto",
+                           proxy: str = "", dns_servers: str = ""):
+        """Apply file-handling + network options to future download workers.
+
+        Takes effect for downloads started after the call; running workers keep
+        their current transport until they finish or are restarted. DNS is
+        applied process-wide immediately (best-effort).
+        """
+        from .http_downloader import configure_dns
+        self.temp_dir = (temp_dir or "").strip()
+        self.preallocate = bool(preallocate)
+        self.auto_cleanup = bool(auto_cleanup)
+        self.http_version = http_version or "auto"
+        self.proxy = (proxy or "").strip()
+        if self.temp_dir:
+            try:
+                os.makedirs(self.temp_dir, exist_ok=True)
+            except OSError:
+                self.temp_dir = ""
+        configure_dns(dns_servers)
+
     def set_schedule_hold(self, hold: bool):
         """Scheduler gate: when held, pause active downloads and stop admitting.
 
@@ -297,7 +326,12 @@ class DownloadManager:
                 worker = MediaDownloader(item, on_progress=self._emit)
             else:
                 worker = HttpDownloader(item, on_progress=self._emit,
-                                        speed_limit=per_worker_limit)
+                                        speed_limit=per_worker_limit,
+                                        temp_dir=self.temp_dir,
+                                        preallocate=self.preallocate,
+                                        auto_cleanup=self.auto_cleanup,
+                                        http_version=self.http_version,
+                                        proxy=self.proxy)
             with self._lock:
                 self._workers[item.id] = worker
             worker.run()

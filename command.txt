@@ -58,7 +58,7 @@ folder). Inno Setup 6 must be installed.
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
 Result:
-    installer_output\SuperfastDownloadManager-Setup-1.0.0.exe
+    installer_output\SuperfastDownloadManager-Setup-2.0.0.exe
 
 That Setup .exe is the final distributable: it installs the app (Start Menu
 shortcut, optional desktop icon, optional run-at-startup), registers a clean
@@ -112,5 +112,5 @@ pre-muxed stream.
 
 Distributable artifacts:
   * Portable exe : dist\onefile\SuperfastDownloadManager.exe
-  * Installer    : installer_output\SuperfastDownloadManager-Setup-1.0.0.exe
+  * Installer    : installer_output\SuperfastDownloadManager-Setup-2.0.0.exe
 ===============================================================================

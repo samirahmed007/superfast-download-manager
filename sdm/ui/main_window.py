@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
 
         # Live components
         self.manager.set_speed_limit(self.cfg.speed_limit_kb * 1024)
+        self._apply_engine_options()
         self.clipboard = ClipboardWatcher(self)
         self.clipboard.link_found.connect(self._on_clipboard_link)
         self.clipboard.set_enabled(self.cfg.clipboard_watch)
@@ -106,6 +107,7 @@ class MainWindow(QMainWindow):
                                  self.cfg.schedule_start, self.cfg.schedule_stop)
 
         self._build_menus()
+        self._build_tray()
 
     # ---- window chrome --------------------------------------------------
     def _set_window_icon(self):
@@ -199,12 +201,13 @@ class MainWindow(QMainWindow):
         box.exec()
 
     def _show_about(self):
+        from .. import __version__
         html = (
             "<h2>Superfast Download Manager</h2>"
-            "<p>A fast, multi-connection download manager with work-stealing "
-            "acceleration, media (yt-dlp) support, checksum verification, "
-            "scheduling, and clipboard capture.</p>"
-            "<p><b>Version:</b> 1.0.0<br>"
+            "<p>A fast, multi-connection download manager with an "
+            "integrity-first work-stealing engine, media (yt-dlp) support, "
+            "checksum verification, scheduling, and clipboard capture.</p>"
+            f"<p><b>Version:</b> {__version__}<br>"
             "<b>Developer:</b> Samir Uddin Ahmed</p>"
             "<p style='color:gray;'>Built with Python & PySide6.</p>")
         box = QMessageBox(self)
@@ -521,17 +524,32 @@ class MainWindow(QMainWindow):
         # Toggle flips the resolved palette to its opposite as an explicit choice.
         self._apply_theme("light" if theme.resolved_theme() == "dark" else "dark")
 
+    def _apply_engine_options(self):
+        """Push file-handling + network settings into the download engine."""
+        self.manager.set_engine_options(
+            temp_dir=self.cfg.temp_dir,
+            preallocate=self.cfg.preallocate,
+            auto_cleanup=self.cfg.auto_cleanup,
+            http_version=self.cfg.http_version,
+            proxy=self.cfg.proxy,
+            dns_servers=self.cfg.dns_servers,
+        )
+
     def _apply_settings(self):
         self.manager.default_dir = self.cfg.download_dir
         os.makedirs(self.cfg.download_dir, exist_ok=True)
         self.manager.default_connections = self.cfg.connections_per_download
         self.manager.set_max_concurrent(self.cfg.max_concurrent)
         self.manager.set_speed_limit(self.cfg.speed_limit_kb * 1024)
+        self._apply_engine_options()
         self.clipboard.set_enabled(self.cfg.clipboard_watch)
         self.scheduler.configure(self.cfg.schedule_enabled,
                                  self.cfg.schedule_start, self.cfg.schedule_stop)
         if not self.cfg.schedule_enabled:
             self.manager.set_schedule_hold(False)
+        if hasattr(self, "tray"):
+            self.tray.setVisible(
+                self.cfg.minimize_to_tray or self.cfg.close_to_tray)
 
     # ---- selection ------------------------------------------------------
     def _on_card_clicked(self, iid, ctrl, shift):
@@ -643,6 +661,7 @@ class MainWindow(QMainWindow):
         item = self.manager.items.get(iid)
         if item:
             QGuiApplication.clipboard().setText(item.url)
+            self.status_label.setText("Link copied to clipboard")
 
     # ---- stats ----------------------------------------------------------
     def _update_stats(self):
@@ -662,7 +681,71 @@ class MainWindow(QMainWindow):
             f"{len(active)} active · {fmt_speed(speed)}" if active
             else f"{len(items)} in library")
 
+    # ---- system tray ----------------------------------------------------
+    def _build_tray(self):
+        """A tray icon so the app can keep downloading while out of the way."""
+        from PySide6.QtGui import QAction, QIcon
+        from PySide6.QtWidgets import QSystemTrayIcon, QMenu
+
+        self._force_quit = False
+        self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(self.windowIcon() or QIcon())
+        self.tray.setToolTip("Superfast Download Manager")
+
+        menu = QMenu()
+        show_act = QAction("Show / Hide", self)
+        show_act.triggered.connect(self._toggle_window)
+        quit_act = QAction("Quit", self)
+        quit_act.triggered.connect(self._quit_from_tray)
+        menu.addAction(show_act)
+        menu.addSeparator()
+        menu.addAction(quit_act)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.setVisible(self.cfg.minimize_to_tray or self.cfg.close_to_tray)
+
+    def _on_tray_activated(self, reason):
+        from PySide6.QtWidgets import QSystemTrayIcon
+        if reason == QSystemTrayIcon.Trigger:      # left-click
+            self._toggle_window()
+
+    def _toggle_window(self):
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
+        else:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+    def _quit_from_tray(self):
+        self._force_quit = True
+        self.close()
+
+    def changeEvent(self, event):
+        from PySide6.QtCore import QEvent
+        if (event.type() == QEvent.WindowStateChange
+                and self.cfg.minimize_to_tray and self.isMinimized()):
+            # Defer the hide so the minimize animation doesn't fight it.
+            QTimer.singleShot(0, self.hide)
+            if hasattr(self, "tray"):
+                self.tray.setVisible(True)
+        super().changeEvent(event)
+
     def closeEvent(self, event):
+        # Close-to-tray keeps downloads running until the user quits explicitly.
+        if (getattr(self, "cfg", None) and self.cfg.close_to_tray
+                and not getattr(self, "_force_quit", False)
+                and hasattr(self, "tray")):
+            event.ignore()
+            self.hide()
+            self.tray.setVisible(True)
+            self.tray.showMessage(
+                "Still downloading",
+                "Superfast Download Manager is running in the tray.",
+                msecs=3000)
+            return
         self.manager.shutdown()
         self.store.close()
+        if hasattr(self, "tray"):
+            self.tray.hide()
         super().closeEvent(event)

@@ -219,6 +219,10 @@ class DownloadItem:
     # integrity
     checksum: str = ""            # "algo:hexdigest" to verify against (optional)
     checksum_ok: Optional[bool] = None  # None=unverified, True/False after check
+    validator: str = ""           # server ETag / Last-Modified for If-Range resume safety
+
+    # per-task options
+    auto_rename: bool = True      # rename instead of overwriting an existing file
 
     # live, non-persisted: per-connection progress fractions for the segment
     # activity view. Refreshed by the downloader; not written to the store.
@@ -242,6 +246,13 @@ class DownloadItem:
     @property
     def display_name(self) -> str:
         return self.title or self.filename or self.url
+
+    @property
+    def download_duration(self) -> float:
+        """Wall-clock seconds spent downloading (start → completion), 0 if unknown."""
+        if self.started_at and self.completed_at and self.completed_at >= self.started_at:
+            return self.completed_at - self.started_at
+        return 0.0
 
     def to_row(self) -> dict:
         d = asdict(self)
