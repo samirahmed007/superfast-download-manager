@@ -174,14 +174,16 @@ class SettingsDialog(QDialog):
         fh_form = QFormLayout(fh)
         temp_row = QHBoxLayout()
         self.temp_edit = QLineEdit(self.cfg.temp_dir)
-        self.temp_edit.setPlaceholderText("Default — beside the finished file")
+        self.temp_edit.setPlaceholderText("Same as the save folder")
         self.temp_edit.setToolTip(
             "Type or paste a folder path, or use Change… to browse. "
-            "Leave blank to keep part files beside the finished file.")
+            "Defaults to the save folder; Reset restores that default.")
         temp_browse = QPushButton("Change…")
         temp_browse.clicked.connect(self._choose_temp)
         temp_clear = QPushButton("Reset")
-        temp_clear.clicked.connect(lambda: self.temp_edit.setText(""))
+        temp_clear.setToolTip("Use the save folder for temporary part files")
+        temp_clear.clicked.connect(
+            lambda: self.temp_edit.setText(self.dir_edit.text()))
         temp_row.addWidget(self.temp_edit, 1)
         temp_row.addWidget(temp_browse)
         temp_row.addWidget(temp_clear)

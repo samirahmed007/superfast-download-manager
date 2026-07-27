@@ -43,7 +43,7 @@ The result: integrity on par with — or better than — IDM, with the work-stea
 - **⏸️ Pause, resume & stop** — segmented downloads resume from exactly where they stopped (a `.sdmpart` sidecar tracks per-segment progress). *Pause* keeps partial data; *Stop* discards it for a clean restart.
 - **🔍 File properties** — right-click any download for a full Properties panel: file type, location, size, source URL, status/progress, timing, average speed, and checksum verdict. All fields are selectable and copyable.
 - **✏️ Rename downloads** — right-click ▸ Rename… or press `F2` to rename a file directly from the list. Works for completed, paused, and queued items; updates resume state so paused downloads still resume correctly.
-- **🗂️ Advanced file handling** — configurable temp folder, file pre-allocation, automatic cleanup of part files, and **auto-rename** so a new download never overwrites an existing file.
+- **🗂️ Advanced file handling** — configurable temp folder (defaults to the same location as the save folder), file pre-allocation, automatic cleanup of part files, and **auto-rename** so a new download never overwrites an existing file.
 - **🔐 Checksum verification** — optionally verify a finished file against an expected `sha256:` / `md5:` (or bare hex) digest; mismatches are flagged, not silently kept.
 - **🗂️ Auto-categorization** — direct files are sorted into Software, Media, Documents, Archives, Images, or Other by extension; media links become Media.
 - **🚦 Queue with priorities** — Urgent / High / Normal / Low, changeable per download from a dropdown or the right-click menu.

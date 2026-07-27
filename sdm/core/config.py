@@ -40,7 +40,7 @@ class Config:
     confirm_remove: bool = True            # ask before removing from the list
 
     # v2: file handling
-    temp_dir: str = ""                     # where .sdmpart lives (blank = beside file)
+    temp_dir: str = ""                     # where .sdmpart lives (blank = same as save folder)
     preallocate: bool = True               # reserve the full size up front
     auto_cleanup: bool = True              # delete part/temp files on cancel/error
     auto_rename: bool = True               # rename instead of overwriting an existing file
@@ -58,6 +58,10 @@ class Config:
     def __post_init__(self):
         if not self.download_dir:
             self.download_dir = _default_download_dir()
+        # Default the temp folder to the save folder so part files live
+        # alongside the finished download unless the user picks elsewhere.
+        if not self.temp_dir:
+            self.temp_dir = self.download_dir
 
     @classmethod
     def load(cls) -> "Config":
