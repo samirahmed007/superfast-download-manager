@@ -41,7 +41,9 @@ The result: integrity on par with — or better than — IDM, with the work-stea
 - **🎬 Video / media downloads** — YouTube, Vimeo, TikTok, and 1000+ sites via yt-dlp, with a quality/format picker grouped by resolution.
 - **📋 Batch & playlist add** — paste many URLs at once, or expand a playlist / channel URL into individual downloads.
 - **⏸️ Pause, resume & stop** — segmented downloads resume from exactly where they stopped (a `.sdmpart` sidecar tracks per-segment progress). *Pause* keeps partial data; *Stop* discards it for a clean restart.
-- **🗄️ Advanced file handling** — configurable temp folder, file pre-allocation, automatic cleanup of part files, and **auto-rename** so a new download never overwrites an existing file.
+- **🔍 File properties** — right-click any download for a full Properties panel: file type, location, size, source URL, status/progress, timing, average speed, and checksum verdict. All fields are selectable and copyable.
+- **✏️ Rename downloads** — right-click ▸ Rename… or press `F2` to rename a file directly from the list. Works for completed, paused, and queued items; updates resume state so paused downloads still resume correctly.
+- **🗂️ Advanced file handling** — configurable temp folder, file pre-allocation, automatic cleanup of part files, and **auto-rename** so a new download never overwrites an existing file.
 - **🔐 Checksum verification** — optionally verify a finished file against an expected `sha256:` / `md5:` (or bare hex) digest; mismatches are flagged, not silently kept.
 - **🗂️ Auto-categorization** — direct files are sorted into Software, Media, Documents, Archives, Images, or Other by extension; media links become Media.
 - **🚦 Queue with priorities** — Urgent / High / Normal / Low, changeable per download from a dropdown or the right-click menu.
@@ -76,6 +78,8 @@ Prefer no install? A single portable **`SuperfastDownloadManager.exe`** is also 
 | `Ctrl+Enter`   | Resume / start selected         |
 | `Ctrl+P`       | Pause selected                  |
 | `Ctrl+S`       | Stop selected (discard partial) |
+| `F2`           | Rename selected download        |
+| `Alt+Enter`    | Properties (right-click menu)    |
 | `Delete`       | Remove selected from list       |
 | `Ctrl+L`       | Toggle activity log             |
 | `Ctrl+D`       | Toggle light / dark theme       |
@@ -115,8 +119,8 @@ pyinstaller superfast-onedir.spec --clean --noconfirm
 
 1. Press **Add** (or `Ctrl+N`) and paste a URL, or use **Paste + Add** to grab the clipboard. Use **Batch** for many URLs / playlists.
 2. Direct file links download with parallel connections; video-site links are handled by yt-dlp automatically. After a fetch, just press **Enter** to add.
-3. Select rows (Ctrl/Shift-click) to pause, resume, stop, or remove in bulk. Right-click for the same actions plus Open file / folder and Copy URL.
-4. Tune folder, connections, parallelism, speed limit, defaults, clipboard, schedule, **temp folder, HTTP version, proxy/DNS, tray, and auto-rename** from **Settings** (`Ctrl+,`).
+3. Select rows (Ctrl/Shift-click) to pause, resume, stop, or remove in bulk. Right-click for the same actions plus **Rename** (F2), **Properties** (Alt+Enter), Open file / folder, and Copy URL.
+4. Tune folder, connections, parallelism, speed limit, defaults, clipboard, schedule, **temp folder, HTTP version, proxy/DNS, tray, and auto-rename** from **Settings** (`Ctrl+,`). The Save-to and Temp folder fields accept typed or pasted paths — no need to use the file browser.
 
 ## 📂 Where things live
 

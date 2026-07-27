@@ -6,11 +6,13 @@ can be reconfigured immediately.
 """
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Signal, QTime
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QSpinBox, QCheckBox, QTimeEdit, QFileDialog, QGroupBox,
-    QComboBox, QTabWidget, QWidget,
+    QComboBox, QTabWidget, QWidget, QMessageBox,
 )
 
 from ..core.config import Config
@@ -54,7 +56,10 @@ class SettingsDialog(QDialog):
         form = QFormLayout(dl)
         dir_row = QHBoxLayout()
         self.dir_edit = QLineEdit(self.cfg.download_dir)
-        self.dir_edit.setReadOnly(True)
+        self.dir_edit.setPlaceholderText("Type or paste a folder path…")
+        self.dir_edit.setToolTip(
+            "Type or paste a folder path, or use Change… to browse. "
+            "The folder is created if it doesn't exist.")
         browse = QPushButton("Change…")
         browse.clicked.connect(self._choose_dir)
         dir_row.addWidget(self.dir_edit, 1)
@@ -170,7 +175,9 @@ class SettingsDialog(QDialog):
         temp_row = QHBoxLayout()
         self.temp_edit = QLineEdit(self.cfg.temp_dir)
         self.temp_edit.setPlaceholderText("Default — beside the finished file")
-        self.temp_edit.setReadOnly(True)
+        self.temp_edit.setToolTip(
+            "Type or paste a folder path, or use Change… to browse. "
+            "Leave blank to keep part files beside the finished file.")
         temp_browse = QPushButton("Change…")
         temp_browse.clicked.connect(self._choose_temp)
         temp_clear = QPushButton("Reset")
@@ -306,8 +313,44 @@ class SettingsDialog(QDialog):
         if d:
             self.temp_edit.setText(d)
 
+    @staticmethod
+    def _norm_path(text: str) -> str:
+        """Expand ~ and environment variables in a typed/pasted folder path."""
+        text = (text or "").strip().strip('"')
+        if not text:
+            return ""
+        return os.path.normpath(os.path.expandvars(os.path.expanduser(text)))
+
     def _apply(self):
-        self.cfg.download_dir = self.dir_edit.text()
+        # Save-to folder: accept typed/pasted paths, normalize, and make sure
+        # it can be created before committing (fall back to the old value).
+        new_dir = self._norm_path(self.dir_edit.text())
+        if not new_dir:
+            QMessageBox.warning(self, "Settings",
+                                "Please choose a download folder.")
+            return
+        try:
+            os.makedirs(new_dir, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(
+                self, "Settings",
+                f"Can't use that download folder:\n{new_dir}\n\n{e}")
+            return
+        self.dir_edit.setText(new_dir)
+        self.cfg.download_dir = new_dir
+
+        # Temp folder is optional; validate only when one is given.
+        new_temp = self._norm_path(self.temp_edit.text())
+        if new_temp:
+            try:
+                os.makedirs(new_temp, exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(
+                    self, "Settings",
+                    f"Can't use that temp folder:\n{new_temp}\n\n{e}")
+                return
+        self.temp_edit.setText(new_temp)
+
         self.cfg.connections_per_download = self.conn_spin.value()
         self.cfg.max_concurrent = self.par_spin.value()
         self.cfg.speed_limit_kb = self.speed_spin.value()

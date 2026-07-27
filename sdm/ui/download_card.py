@@ -34,6 +34,7 @@ class DownloadCard(QFrame):
     open_folder = Signal(str)
     copy_url = Signal(str)
     rename = Signal(str)
+    properties = Signal(str)
     set_priority = Signal(str, object)  # (id, Priority)
     # Emitted on a body click so the window can drive multi-select.
     # Args: (id, ctrl_held, shift_held)
@@ -193,6 +194,10 @@ class DownloadCard(QFrame):
             lambda: self.open_folder.emit(iid))
         menu.addSeparator()
         menu.addAction("Remove").triggered.connect(lambda: self.remove.emit(iid))
+        menu.addSeparator()
+        props = menu.addAction("Properties")
+        props.setShortcut("Alt+Return")
+        props.triggered.connect(lambda: self.properties.emit(iid))
         menu.exec(event.globalPos())
 
     # ---- updates --------------------------------------------------------

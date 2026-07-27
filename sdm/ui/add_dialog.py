@@ -178,6 +178,10 @@ class AddDialog(QDialog):
         dir_row = QHBoxLayout()
         dir_row.addWidget(QLabel("Save to:"))
         self.dir_edit = QLineEdit(default_dir)
+        self.dir_edit.setPlaceholderText("Type or paste a folder path…")
+        self.dir_edit.setToolTip(
+            "Type or paste a folder path, or use … to browse. "
+            "The folder is created if it doesn't exist.")
         dir_row.addWidget(self.dir_edit, 1)
         browse = QPushButton("…")
         browse.setFixedWidth(36)
@@ -421,6 +425,11 @@ class AddDialog(QDialog):
         if not (url.startswith("http://") or url.startswith("https://")):
             self.status_lbl.setText("⚠ Enter a valid http(s) URL")
             return
+        # Normalize a typed/pasted save folder (expand ~ and env vars).
+        save_dir = self.dir_edit.text().strip().strip('"')
+        if save_dir:
+            save_dir = os.path.normpath(
+                os.path.expandvars(os.path.expanduser(save_dir)))
         p = self._probe
         from ..core.manager import guess_kind
         kind = p.kind if p else guess_kind(url)
@@ -449,7 +458,7 @@ class AddDialog(QDialog):
             resolved_cat = cat
         item = DownloadItem(
             url=url,
-            save_dir=self.dir_edit.text().strip(),
+            save_dir=save_dir,
             connections=self.conn.value(),
             kind=kind,
             priority=Priority(self.priority.currentData()),

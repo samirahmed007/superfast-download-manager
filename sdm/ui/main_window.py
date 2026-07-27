@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
         card.open_folder.connect(self._open_folder)
         card.copy_url.connect(self._copy_url)
         card.rename.connect(self._rename)
+        card.properties.connect(self._show_properties)
         card.set_priority.connect(self.manager.set_priority)
         card.clicked.connect(self._on_card_clicked)
         self._cards[item.id] = card
@@ -695,6 +696,14 @@ class MainWindow(QMainWindow):
                 "Select exactly one download to rename")
             return
         self._rename(ids[0])
+
+    def _show_properties(self, iid):
+        """Right-click ▸ Properties: a detailed read-out for one download."""
+        item = self.manager.items.get(iid)
+        if item is None:
+            return
+        from .properties_dialog import PropertiesDialog
+        PropertiesDialog(item, self).exec()
 
     # ---- stats ----------------------------------------------------------
     def _update_stats(self):
