@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
         act(edit_menu, "Resume Selected", self._resume_selected, "Ctrl+Return")
         act(edit_menu, "Pause Selected", self._pause_selected, "Ctrl+P")
         act(edit_menu, "Stop Selected", self._stop_selected, "Ctrl+S")
+        act(edit_menu, "Rename…", self._rename_selected, "F2")
         act(edit_menu, "Remove Selected", self._remove_selected, "Delete")
 
         view_menu = bar.addMenu("&View")
@@ -182,6 +183,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+Enter", "Resume / start selected"),
             ("Ctrl+P", "Pause selected"),
             ("Ctrl+S", "Stop selected (discard partial)"),
+            ("F2", "Rename selected download"),
             ("Delete", "Remove selected from list"),
             ("Ctrl+L", "Toggle activity log"),
             ("Ctrl+D", "Toggle light / dark theme"),
@@ -356,6 +358,7 @@ class MainWindow(QMainWindow):
         card.open_file.connect(self._open_file)
         card.open_folder.connect(self._open_folder)
         card.copy_url.connect(self._copy_url)
+        card.rename.connect(self._rename)
         card.set_priority.connect(self.manager.set_priority)
         card.clicked.connect(self._on_card_clicked)
         self._cards[item.id] = card
@@ -662,6 +665,36 @@ class MainWindow(QMainWindow):
         if item:
             QGuiApplication.clipboard().setText(item.url)
             self.status_label.setText("Link copied to clipboard")
+
+    def _rename(self, iid):
+        """Prompt for a new file name and rename the download on disk + in state."""
+        from PySide6.QtWidgets import QInputDialog
+        item = self.manager.items.get(iid)
+        if item is None:
+            return
+        current = item.filename or item.display_name or ""
+        new_name, ok = QInputDialog.getText(
+            self, "Rename download", "New file name:", text=current)
+        if not ok:
+            return
+        ok, msg = self.manager.rename(iid, new_name.strip())
+        if not ok:
+            if msg:
+                QMessageBox.warning(self, "Rename", msg)
+            return
+        card = self._cards.get(iid)
+        if card is not None:
+            card.update_item(item)
+        self.status_label.setText(f"Renamed to {item.filename}")
+
+    def _rename_selected(self):
+        """F2 / Edit ▸ Rename: rename the single selected download."""
+        ids = self._selected_or_empty()
+        if len(ids) != 1:
+            self.status_label.setText(
+                "Select exactly one download to rename")
+            return
+        self._rename(ids[0])
 
     # ---- stats ----------------------------------------------------------
     def _update_stats(self):

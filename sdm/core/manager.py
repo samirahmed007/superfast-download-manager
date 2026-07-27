@@ -16,7 +16,7 @@ from typing import Callable, Dict, List, Optional
 from .eventlog import LOG
 from .http_downloader import HttpDownloader
 from .media_downloader import MediaDownloader
-from .models import DownloadItem, Kind, Priority, Status, categorize
+from .models import DownloadItem, Kind, Priority, Status, categorize, sanitize_filename
 from .store import Store
 
 ProgressCb = Callable[[DownloadItem], None]
@@ -216,6 +216,64 @@ class DownloadManager:
                 self.store.upsert(item)
         if item:
             self._emit(item)
+
+    def _part_paths(self, item: DownloadItem) -> list[str]:
+        """The .sdmpart sidecar paths for an item, honouring a custom temp dir."""
+        final = item.filepath
+        if not final:
+            return []
+        if self.temp_dir:
+            base = os.path.join(self.temp_dir, os.path.basename(final) + ".sdmpart")
+        else:
+            base = final + ".sdmpart"
+        return [base, base + ".json"]
+
+    def rename(self, item_id: str, new_name: str) -> tuple[bool, str]:
+        """Rename a download's file (and its resume sidecars) on disk + in state.
+
+        Returns ``(ok, message)``. Blocks while the item is actively
+        downloading — the worker holds the file open and derives its paths from
+        the current name. Pause or stop first.
+        """
+        with self._lock:
+            item = self.items.get(item_id)
+            active = item_id in self._workers
+        if not item:
+            return False, "Download not found."
+        if active or item.status.is_active():
+            return False, "Pause or stop the download before renaming."
+
+        new_name = sanitize_filename(new_name)
+        if not new_name:
+            return False, "Please enter a valid file name."
+        if new_name == item.filename:
+            return True, ""                       # no-op
+
+        old_paths = self._part_paths(item)
+        old_file = item.filepath
+        new_file = os.path.join(item.save_dir, new_name)
+        if os.path.exists(new_file):
+            return False, f"“{new_name}” already exists in this folder."
+
+        try:
+            if item.status == Status.COMPLETED and old_file and os.path.exists(old_file):
+                os.rename(old_file, new_file)
+        except OSError as e:
+            return False, f"Could not rename file: {e}"
+
+        # Point resume state at the new name so a paused download still resumes.
+        item.filename = new_name
+        for old_p, new_p in zip(old_paths, self._part_paths(item)):
+            if old_p != new_p and os.path.exists(old_p):
+                try:
+                    os.replace(old_p, new_p)
+                except OSError:
+                    pass
+
+        self.store.upsert(item)
+        self._emit(item)
+        LOG.info("Renamed", new_name)
+        return True, ""
 
     def set_max_concurrent(self, n: int):
         with self._lock:

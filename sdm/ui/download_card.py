@@ -33,6 +33,7 @@ class DownloadCard(QFrame):
     open_file = Signal(str)
     open_folder = Signal(str)
     copy_url = Signal(str)
+    rename = Signal(str)
     set_priority = Signal(str, object)  # (id, Priority)
     # Emitted on a body click so the window can drive multi-select.
     # Args: (id, ctrl_held, shift_held)
@@ -160,10 +161,17 @@ class DownloadCard(QFrame):
         """Right-click menu: copy link, change priority, and quick actions."""
         item = self.item
         iid = item.id
+        st = item.status
         menu = QMenu(self)
 
         copy = menu.addAction("Copy link")
         copy.triggered.connect(lambda: self.copy_url.emit(iid))
+
+        rename = menu.addAction("Rename…")
+        rename.setShortcut("F2")
+        rename.triggered.connect(lambda: self.rename.emit(iid))
+        # Renaming needs the file closed; disabled only while actively downloading.
+        rename.setEnabled(st not in (Status.DOWNLOADING, Status.CONNECTING))
 
         pr_menu = menu.addMenu("Set priority")
         for p in Priority:
@@ -172,7 +180,6 @@ class DownloadCard(QFrame):
             act.triggered.connect(lambda _c=False, pr=p: self._pick_priority(pr))
 
         menu.addSeparator()
-        st = item.status
         if st in (Status.DOWNLOADING, Status.CONNECTING, Status.QUEUED):
             menu.addAction("Pause").triggered.connect(lambda: self.pause.emit(iid))
             menu.addAction("Stop").triggered.connect(lambda: self.stop.emit(iid))
