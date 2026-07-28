@@ -8,6 +8,9 @@ This onedir folder is what the Inno Setup script packages into an installer.
 It starts faster than the onefile build (no self-extraction step).
 """
 
+import PyInstaller.config
+PyInstaller.config.CONF['distpath'] = 'dist/onedir'
+
 block_cipher = None
 
 a = Analysis(

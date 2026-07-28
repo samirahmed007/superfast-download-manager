@@ -2,11 +2,14 @@
 """PyInstaller spec for Superfast Download Manager.
 
 Build:  pyinstaller superfast.spec --clean --noconfirm
-Output: dist/SuperfastDownloadManager.exe  (single portable file)
+Output: dist/onefile/SuperfastDownloadManager.exe  (single portable file)
 
 This is a ONEFILE build: everything (Python, PySide6/Qt, yt-dlp, the icon)
 is packed into one .exe that runs on any Windows PC with no installation.
 """
+
+import PyInstaller.config
+PyInstaller.config.CONF['distpath'] = 'dist/onefile'
 
 block_cipher = None
 

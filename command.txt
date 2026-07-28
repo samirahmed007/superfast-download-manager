@@ -58,7 +58,7 @@ folder). Inno Setup 6 must be installed.
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
 Result:
-    installer_output\SuperfastDownloadManager-Setup-2.0.0.exe
+    installer_output\SuperfastDownloadManager-Setup-2.1.0.exe
 
 That Setup .exe is the final distributable: it installs the app (Start Menu
 shortcut, optional desktop icon, optional run-at-startup), registers a clean
@@ -75,12 +75,16 @@ Single file:
         --collect-all yt_dlp ^
         main.py
 
+    pyinstaller --onefile --windowed --name SuperfastDownloadManager --icon assets/icon.ico --add-data "assets;assets" --collect-all yt_dlp main.py
+
 One dir:
     pyinstaller --onedir --windowed --name SuperfastDownloadManager ^
         --icon assets/icon.ico ^
         --add-data "assets;assets" ^
         --collect-all yt_dlp ^
         main.py
+
+    pyinstaller --onedir --windowed --name SuperfastDownloadManager --icon assets/icon.ico --add-data "assets;assets" --collect-all yt_dlp main.py
 
 Notes:
   * --onefile / --onedir  -> one .exe  /  a folder
@@ -112,5 +116,5 @@ pre-muxed stream.
 
 Distributable artifacts:
   * Portable exe : dist\onefile\SuperfastDownloadManager.exe
-  * Installer    : installer_output\SuperfastDownloadManager-Setup-2.0.0.exe
+  * Installer    : installer_output\SuperfastDownloadManager-Setup-2.1.0.exe
 ===============================================================================

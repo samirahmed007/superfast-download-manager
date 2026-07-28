@@ -286,7 +286,7 @@ class DownloadCard(QFrame):
             self._thumb_loaded = True
 
     def _update_progress(self, item: DownloadItem):
-        pct = item.progress
+        pct = item.progress * 100
         show_bar = item.status in (
             Status.DOWNLOADING, Status.PAUSED, Status.COMPLETED,
             Status.ERROR, Status.CONNECTING)

@@ -40,7 +40,7 @@ CHUNK = 1024 * 256          # 256 KiB socket reads
 MIN_SEG = 1024 * 1024       # don't split below 1 MiB/segment
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 SDM/2.0"
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 SDM/2.1"
 )
 
 ProgressCb = Callable[[DownloadItem], None]
@@ -237,8 +237,11 @@ class HttpDownloader:
         except Exception:  # noqa: BLE001 - some servers refuse HEAD outright
             headers, status = {}, 400
 
-        if status >= 400 or "content-length" not in headers:
-            # HEAD unusable; probe with a 1-byte ranged GET instead.
+        head_accepts = headers.get("accept-ranges", "").lower() == "bytes"
+        if status >= 400 or "content-length" not in headers or not head_accepts:
+            # HEAD unusable or didn't advertise range support; confirm with a
+            # 1-byte ranged GET so servers that omit Accept-Ranges but do honour
+            # Range requests (common on some CDNs) still get multi-connection.
             with self._stream({"Range": "bytes=0-0"}) as g:
                 headers = {k.lower(): v for k, v in g.headers.items()}
                 status = g.status_code

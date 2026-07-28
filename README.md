@@ -9,7 +9,7 @@ Multi-connection acceleration, 1000+ video sites, pause/resume, scheduling, and 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)
-![Version](https://img.shields.io/badge/version-2.0.0-8A2BE2)
+![Version](https://img.shields.io/badge/version-2.1.0-8A2BE2)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 </div>
@@ -19,6 +19,13 @@ Multi-connection acceleration, 1000+ video sites, pause/resume, scheduling, and 
 ## Why you'll like it
 
 Most download managers are either bloated, ad-riddled, or locked behind a paywall. This one is none of those. It borrows the best ideas from IDM and aria2 — parallel byte-range downloading with work-stealing — wraps them in a modern Qt interface, and adds full yt-dlp media support so you can grab videos from 1000+ sites with a quality picker. It's a single portable `.exe` or a proper installer. That's it.
+
+## 🆕 What's new in 2.1 — universal compatibility fixes
+
+Version 2.1 fixes two bugs that caused incorrect behaviour on some systems:
+
+- **Progress always showed 0%** — the progress bar and stats line now display the correct real-time percentage on all systems.
+- **Only 1 connection used on some servers/networks** — the range-support probe now performs a 1-byte ranged GET whenever a HEAD response omits `Accept-Ranges`, even if `Content-Length` is present. Many CDNs and firewalls strip that header but still honour `Range` requests; the extra probe confirms support and restores full multi-connection acceleration.
 
 ## 🆕 What's new in 2.0 — integrity-first engine
 
