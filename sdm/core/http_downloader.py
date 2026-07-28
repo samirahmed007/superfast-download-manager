@@ -297,6 +297,11 @@ class HttpDownloader:
         try:
             with open(self._part_path + ".json", "r", encoding="utf-8") as f:
                 data = json.load(f)
+            saved_total = data.get("total", 0)
+            # Probe may return total_bytes=0 when a CDN token has expired (403/redirect).
+            # Trust the saved total so the resume check doesn't reject valid state.
+            if self.item.total_bytes == 0 and saved_total:
+                self.item.total_bytes = saved_total
             if (data.get("url") != self.item.url
                     or data.get("total") != self.item.total_bytes):
                 return False
@@ -311,6 +316,10 @@ class HttpDownloader:
                 segs.append(Segment(**s))
             self._segments = segs
             self.item.downloaded_bytes = sum(s.downloaded for s in self._segments)
+            # A saved multi-segment state proves ranges were supported; restore the
+            # flag so workers send Range headers and Properties shows Resumable: Yes.
+            if len(self._segments) > 1:
+                self.item.supports_ranges = True
             return True
         except (OSError, ValueError, KeyError):
             return False
